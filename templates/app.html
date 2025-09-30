@@ -1,0 +1,347 @@
+<!-- templates/app.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Endorisum Mini-App</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://unpkg.com/three@0.158.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.158.0/examples/js/controls/OrbitControls.js"></script>
+  <style>
+    :root{ --bg:#0f1115; --card:#161a22; --text:#e8eefb; --muted:#9aa7bd; --acc:#5b8cff; }
+    *{ box-sizing:border-box }
+    body{ margin:0; background:var(--bg); color:var(--text); font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial }
+    header{ padding:16px; display:flex; align-items:center; gap:12px; border-bottom:1px solid #232835; }
+    header h1{ font-size:16px; margin:0; font-weight:600; }
+    main{ padding:16px; display:grid; gap:16px; max-width:1024px; margin:0 auto }
+    .tabs{ display:flex; gap:8px; flex-wrap:wrap }
+    .tab{ background:#1b2130; border:1px solid #2a3244; color:var(--text); padding:10px 14px; border-radius:10px; cursor:pointer }
+    .tab.active{ background:var(--acc); border-color:var(--acc); color:#fff }
+    .card{ background:var(--card); border:1px solid #2a3244; border-radius:16px; padding:16px }
+    .row{ display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start }
+    .col{ flex:1 1 320px }
+    .label{ font-size:12px; color:var(--muted) }
+    .val{ font-size:14px; margin:2px 0 10px }
+    .btn{ background:#1e2636; border:1px solid #2a3244; color:var(--text); padding:10px 12px; border-radius:10px; cursor:pointer }
+    .btn.primary{ background:var(--acc); border-color:var(--acc); color:#fff }
+    .outfits{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px }
+    .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px }
+    .nft{ background:#0f131c; border:1px solid #2a3244; border-radius:12px; padding:8px; text-align:center }
+    .nft img{ width:100%; height:120px; object-fit:cover; border-radius:8px; background:#090c12 }
+    #avatarWrap{ height:340px; background:#0b0e15; border:1px solid #2a3244; border-radius:12px; overflow:hidden }
+    footer{ padding:16px; text-align:center; color:var(--muted); font-size:12px }
+    a{ color:#aecdff; text-decoration:none }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Endorisum • Mini-App</h1>
+  </header>
+
+  <main>
+    <div class="tabs">
+      <button class="tab active" data-pane="profile">👤 Profil</button>
+      <button class="tab" data-pane="mines">⛏️ Mines</button>
+      <button class="tab" data-pane="settings">⚙️ Paramètres</button>
+      <button class="tab" data-pane="danger">❌ Se désinscrire</button>
+    </div>
+
+    <!-- Profil -->
+    <section class="card" id="pane-profile">
+      <div class="row">
+        <div class="col">
+          <div class="label">Telegram ID</div>
+          <div class="val" id="tgid">—</div>
+          <div class="label">Wallet TON</div>
+          <div class="val" id="wallet">—</div>
+          <div class="label">Code de parrainage</div>
+          <div class="val" id="code">—</div>
+          <div class="label">Total pioches</div>
+          <div class="val" id="pioches">0</div>
+        </div>
+        <div class="col">
+          <div id="avatarWrap"></div>
+          <div style="margin-top:10px; display:flex; gap:8px;">
+            <button class="btn" id="btnLeft">↺ Tourner</button>
+            <button class="btn" id="btnRight">↻ Tourner</button>
+            <button class="btn primary" id="btnCenter">Centrer</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <div class="label" style="margin-bottom:6px">NFT du wallet</div>
+        <div class="grid" id="nfts"></div>
+      </div>
+    </section>
+
+    <!-- Mines -->
+    <section class="card" id="pane-mines" style="display:none">
+      <div class="grid" id="mines"></div>
+    </section>
+
+    <!-- Settings (habillage avatar) -->
+    <section class="card" id="pane-settings" style="display:none">
+      <div class="row">
+        <div class="col">
+          <div class="label">Chapeau</div>
+          <div class="outfits">
+            <button class="btn outfit" data-type="hat" data-val="none">Aucun</button>
+            <button class="btn outfit" data-type="hat" data-val="cap">Casquette</button>
+          </div>
+
+          <div class="label" style="margin-top:12px">Veste</div>
+          <div class="outfits">
+            <button class="btn outfit" data-type="jacket" data-val="none">Aucune</button>
+            <button class="btn outfit" data-type="jacket" data-val="jacket1">Veste 1</button>
+          </div>
+        </div>
+        <div class="col">
+          <div class="label">Pantalon</div>
+          <div class="outfits">
+            <button class="btn outfit" data-type="pants" data-val="none">Aucun</button>
+            <button class="btn outfit" data-type="pants" data-val="pants1">Pantalon 1</button>
+          </div>
+
+          <div class="label" style="margin-top:12px">Chaussures</div>
+          <div class="outfits">
+            <button class="btn outfit" data-type="shoes" data-val="none">Aucune</button>
+            <button class="btn outfit" data-type="shoes" data-val="shoes1">Chaussures 1</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <button class="btn primary" id="saveOutfit">💾 Enregistrer</button>
+      </div>
+    </section>
+
+    <!-- Danger -->
+    <section class="card" id="pane-danger" style="display:none">
+      <p>Se désinscrire supprimera tes données du jeu (wallet associé, avatar, etc.).</p>
+      <button class="btn" id="btnUnsub">❌ Confirmer la désinscription</button>
+    </section>
+  </main>
+
+  <footer>© Endorisum</footer>
+
+<script>
+(function(){
+  // --------------------------
+  // Helpers
+  // --------------------------
+  const qs = new URLSearchParams(window.location.search);
+  const uid = qs.get("uid");
+  if(!uid){ document.body.innerHTML = "<p style='padding:16px'>Bad UID</p>"; return; }
+
+  const tgid = document.getElementById('tgid');
+  const wallet = document.getElementById('wallet');
+  const code = document.getElementById('code');
+  const pioches = document.getElementById('pioches');
+  const nftsWrap = document.getElementById('nfts');
+  const minesWrap = document.getElementById('mines');
+
+  // Tabs
+  const tabs = document.querySelectorAll(".tab");
+  const panes = {
+    profile: document.getElementById('pane-profile'),
+    mines: document.getElementById('pane-mines'),
+    settings: document.getElementById('pane-settings'),
+    danger: document.getElementById('pane-danger'),
+  };
+  tabs.forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      tabs.forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      for (const k in panes) panes[k].style.display = "none";
+      panes[btn.dataset.pane].style.display = "block";
+      if (btn.dataset.pane === 'mines') loadMines();
+    });
+  });
+
+  // --------------------------
+  // THREE.JS – Avatar simple
+  // --------------------------
+  let scene, camera, renderer, controls, avatarGroup;
+  function createAvatar(hat='none', jacket='none', pants='none', shoes='none'){
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b0e15);
+
+    const w = document.getElementById('avatarWrap').clientWidth;
+    const h = document.getElementById('avatarWrap').clientHeight;
+
+    camera = new THREE.PerspectiveCamera(35, w/h, 0.1, 100);
+    camera.position.set(0, 1.4, 3);
+
+    renderer = new THREE.WebGLRenderer({ antialias:true });
+    renderer.setSize(w, h);
+    const wrap = document.getElementById('avatarWrap');
+    wrap.innerHTML = "";
+    wrap.appendChild(renderer.domElement);
+
+    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enablePan = false;
+    controls.minDistance = 2.2; controls.maxDistance = 5;
+    controls.target.set(0,1.1,0);
+
+    // Lumière
+    const amb = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(amb);
+    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir.position.set(2,3,2);
+    scene.add(dir);
+
+    // Sol
+    const plane = new THREE.Mesh(
+      new THREE.CircleGeometry(2.2, 64),
+      new THREE.MeshStandardMaterial({ color:0x0f131c, roughness:1 })
+    );
+    plane.rotation.x = -Math.PI/2;
+    plane.position.y = 0;
+    scene.add(plane);
+
+    // Avatar (formes simples)
+    avatarGroup = new THREE.Group(); scene.add(avatarGroup);
+    const skin = new THREE.MeshStandardMaterial({ color:0xffd7b5, roughness:0.6 });
+
+    // Corps
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.45,0.52,1.0,32), new THREE.MeshStandardMaterial({color:0x3b82f6}));
+    body.position.y = 1.0; avatarGroup.add(body);
+
+    // Tête
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.28,32,32), skin);
+    head.position.y = 1.7; avatarGroup.add(head);
+
+    // Jambes
+    const legMat = new THREE.MeshStandardMaterial({color:(pants==='pants1'?0x4b5563:0x334155)});
+    const leg1 = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,0.6,24), legMat);
+    const leg2 = leg1.clone();
+    leg1.position.set(-0.18,0.55,0); leg2.position.set(0.18,0.55,0);
+    avatarGroup.add(leg1, leg2);
+
+    // Chaussures
+    if (shoes !== 'none'){
+      const shoeMat = new THREE.MeshStandardMaterial({color:0x111827, metalness:0.2, roughness:0.8});
+      const shoe1 = new THREE.Mesh(new THREE.BoxGeometry(0.28,0.12,0.5), shoeMat);
+      const shoe2 = shoe1.clone();
+      shoe1.position.set(-0.18,0.25,0.05); shoe2.position.set(0.18,0.25,0.05);
+      avatarGroup.add(shoe1, shoe2);
+    }
+
+    // Veste
+    if (jacket !== 'none'){
+      const jacketMat = new THREE.MeshStandardMaterial({color:0x0ea5e9, metalness:0, roughness:0.8});
+      const jacketMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.56,1.02,32,1,true), jacketMat);
+      jacketMesh.position.y = 1.0;
+      avatarGroup.add(jacketMesh);
+    }
+
+    // Chapeau
+    if (hat === 'cap'){
+      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.35,0.35,0.04,32), new THREE.MeshStandardMaterial({color:0x1f2937}));
+      brim.position.y = 1.85; avatarGroup.add(brim);
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.27,32,32, 0, Math.PI), new THREE.MeshStandardMaterial({color:0x111827}));
+      cap.position.y = 1.92; cap.rotation.z = Math.PI;
+      avatarGroup.add(cap);
+    }
+
+    // Render loop
+    (function animate(){
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    })();
+
+    // Boutons rotation
+    document.getElementById('btnLeft').onclick = ()=>{ avatarGroup.rotation.y -= 0.3; };
+    document.getElementById('btnRight').onclick = ()=>{ avatarGroup.rotation.y += 0.3; };
+    document.getElementById('btnCenter').onclick = ()=>{ avatarGroup.rotation.y = 0; controls.reset(); };
+  }
+
+  // --------------------------
+  // Load data
+  // --------------------------
+  let avatar = { hat:'none', jacket:'none', pants:'none', shoes:'none' };
+
+  async function loadMe(){
+    const r = await fetch(`/api/me?uid=${uid}`, {cache:'no-store'});
+    const data = await r.json();
+    if (!data.registered){
+      document.body.innerHTML = "<p style='padding:16px'>Non inscrit. Lance /start et connecte ton wallet.</p>";
+      return;
+    }
+    tgid.textContent = data.telegram_id;
+    wallet.textContent = data.wallet_address || '—';
+    code.textContent = data.personal_code || '—';
+    pioches.textContent = data.pioches_total || 0;
+    avatar = data.avatar || avatar;
+
+    // NFTs
+    nftsWrap.innerHTML = "";
+    (data.nfts || []).forEach(n=>{
+      const div = document.createElement('div');
+      div.className = 'nft';
+      div.innerHTML = `<img src="${n.image||''}" alt=""><div style="margin-top:6px; font-size:12px">${n.name||'NFT'}</div>`;
+      nftsWrap.appendChild(div);
+    });
+
+    createAvatar(avatar.hat, avatar.jacket, avatar.pants, avatar.shoes);
+  }
+
+  async function loadMines(){
+    const r = await fetch('/api/mines');
+    const data = await r.json();
+    minesWrap.innerHTML = "";
+    (data.mines||[]).forEach(m=>{
+      const a = document.createElement('a');
+      a.className = 'btn'; a.href = m.url; a.textContent = m.title; a.target="_blank";
+      minesWrap.appendChild(a);
+    });
+  }
+
+  // --------------------------
+  // Outfits
+  // --------------------------
+  document.querySelectorAll('.outfit').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const t = btn.dataset.type;
+      const v = btn.dataset.val;
+      avatar[t] = v;
+      createAvatar(avatar.hat, avatar.jacket, avatar.pants, avatar.shoes);
+    });
+  });
+
+  document.getElementById('saveOutfit').addEventListener('click', async ()=>{
+    await fetch('/api/avatar/update',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ uid, ...avatar })
+    });
+    Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success');
+  });
+
+  // --------------------------
+  // Unsubscribe
+  // --------------------------
+  document.getElementById('btnUnsub').addEventListener('click', async ()=>{
+    const ok = confirm("Confirmer la désinscription ?");
+    if(!ok) return;
+    await fetch('/api/unsubscribe', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ uid })
+    });
+    alert("Compte supprimé. Relance /start pour te réinscrire.");
+    if (Telegram?.WebApp) Telegram.WebApp.close();
+  });
+
+  // Init
+  if (Telegram?.WebApp) {
+    Telegram.WebApp.expand();
+    Telegram.WebApp.ready();
+  }
+  loadMe();
+})();
+</script>
+</body>
+</html>
