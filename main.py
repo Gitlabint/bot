@@ -1,11 +1,11 @@
-from flask import Flask, request, render_template, jsonify
+from flask import Flask, request, jsonify, render_template
 from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import sqlite3, random, string, os, secrets, json
+import sqlite3, random, string, os, secrets
 
-# --- Flask setup ---
-app = Flask(__name__, static_url_path="/static", static_folder="static")
+# --- Flask ---
+app = Flask(__name__, static_url_path="/static", static_folder="static", template_folder="templates")
 app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -15,7 +15,7 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "MyMiningBot")
 if not TELEGRAM_TOKEN or not PUBLIC_BASE_URL:
     raise ValueError("⚠️ Variables d’environnement manquantes")
 
-# --- Database ---
+# --- DB ---
 DB_FILE = "bot.db"
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 cursor = conn.cursor()
@@ -25,7 +25,11 @@ CREATE TABLE IF NOT EXISTS users (
     wallet_address TEXT,
     personal_code TEXT UNIQUE,
     referral_code_used TEXT,
-    avatar_style TEXT DEFAULT 'default'
+    hat TEXT DEFAULT 'none',
+    jacket TEXT DEFAULT 'none',
+    pants TEXT DEFAULT 'none',
+    shoes TEXT DEFAULT 'none',
+    bracelet TEXT DEFAULT 'metal'
 )
 ''')
 conn.commit()
@@ -33,26 +37,35 @@ conn.commit()
 def generate_referral_code(length=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
-def add_user(telegram_id, wallet_address=None, referral=None):
-    personal_code = generate_referral_code()
+def add_user(uid, wallet=None, referral=None):
+    cursor.execute("SELECT 1 FROM users WHERE telegram_id=?", (uid,))
+    if cursor.fetchone(): return
+    code = generate_referral_code()
     cursor.execute("""
-        INSERT OR IGNORE INTO users (telegram_id, wallet_address, personal_code, referral_code_used)
-        VALUES (?, ?, ?, ?)
-    """, (telegram_id, wallet_address, personal_code, referral))
+      INSERT INTO users (telegram_id, wallet_address, personal_code, referral_code_used)
+      VALUES (?, ?, ?, ?)
+    """, (uid, wallet, code, referral))
     conn.commit()
 
-def get_user(user_id):
-    cursor.execute("SELECT telegram_id, wallet_address, personal_code, referral_code_used, avatar_style FROM users WHERE telegram_id=?", (user_id,))
+def get_user(uid):
+    cursor.execute("SELECT * FROM users WHERE telegram_id=?", (uid,))
     return cursor.fetchone()
 
-def update_avatar(uid, style):
-    cursor.execute("UPDATE users SET avatar_style=? WHERE telegram_id=?", (style, uid))
+def update_avatar(uid, data):
+    cursor.execute("""
+        UPDATE users SET hat=?, jacket=?, pants=?, shoes=?, bracelet=? WHERE telegram_id=?
+    """, (data.get("hat"), data.get("jacket"), data.get("pants"),
+          data.get("shoes"), data.get("bracelet","metal"), uid))
     conn.commit()
 
-# --- Flask routes ---
+def remove_user(uid):
+    cursor.execute("DELETE FROM users WHERE telegram_id=?", (uid,))
+    conn.commit()
+
+# --- API ---
 @app.route("/")
 def home():
-    return "✅ Bot avec MiniApp fonctionne"
+    return "✅ Bot + MiniApp actif"
 
 @app.route("/app")
 def mini_app():
@@ -60,66 +73,82 @@ def mini_app():
     ref = request.args.get("ref")
     return render_template("app.html", uid=uid, ref=ref, public_base=PUBLIC_BASE_URL)
 
-@app.route("/user/<int:uid>")
-def get_user_data(uid):
-    row = get_user(uid)
-    if not row:
-        return jsonify({"error": "not found"}), 404
+@app.route("/api/me")
+def api_me():
+    uid = int(request.args.get("uid", "0"))
+    user = get_user(uid)
+    if not user: return jsonify({"registered": False})
+
+    (telegram_id, wallet, code, ref, hat, jacket, pants, shoes, bracelet) = user
     return jsonify({
-        "telegram_id": row[0],
-        "wallet": row[1],
-        "personal_code": row[2],
-        "referral_code_used": row[3],
-        "avatar_style": row[4]
+        "registered": True,
+        "telegram_id": telegram_id,
+        "wallet_address": wallet,
+        "personal_code": code,
+        "referral_code_used": ref,
+        "pioches_total": 3,  # exemple statique
+        "avatar": {"hat": hat, "jacket": jacket, "pants": pants, "shoes": shoes, "bracelet": bracelet},
+        "nfts": [
+            {"name":"NFT1","image":f"{PUBLIC_BASE_URL}/static/watch.png"},
+            {"name":"NFT2","image":f"{PUBLIC_BASE_URL}/static/watch.png"}
+        ]
     })
 
-@app.route("/update_avatar", methods=["POST"])
-def update_avatar_route():
+@app.route("/api/mines")
+def api_mines():
+    return jsonify({
+        "mines": [
+            {"title":"Mine 1","url":"https://t.me/mine1"},
+            {"title":"Mine 2","url":"https://t.me/mine2"}
+        ]
+    })
+
+@app.route("/api/avatar/update", methods=["POST"])
+def api_avatar_update():
     data = request.get_json()
     uid = int(data.get("uid"))
-    style = data.get("avatar_style")
-    update_avatar(uid, style)
+    update_avatar(uid, data)
     return jsonify({"ok": True})
 
-# --- Bot menus ---
+@app.route("/api/unsubscribe", methods=["POST"])
+def api_unsub():
+    data = request.get_json()
+    uid = int(data.get("uid"))
+    remove_user(uid)
+    return jsonify({"ok": True})
+
+# --- Telegram Bot ---
 def main_menu():
     return ("Bienvenue !", InlineKeyboardMarkup([
         [InlineKeyboardButton("🔗 Connect TON Wallet", callback_data="connect")]
     ]))
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    add_user(user_id)  # crée l’utilisateur si pas déjà en DB
+    uid = update.effective_user.id
+    add_user(uid)
     text, kb = main_menu()
     await update.message.reply_text(text, reply_markup=kb)
 
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    action = query.data
-
-    if action == "connect":
+    query = update.callback_query; await query.answer()
+    uid = query.from_user.id
+    if query.data == "connect":
         nonce = secrets.token_hex(8)
-        connect_url = f"{PUBLIC_BASE_URL}/app?uid={user_id}&nonce={nonce}"
-        btn = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🚀 Ouvrir MiniApp", web_app=WebAppInfo(url=connect_url))
-        ]])
-        await query.edit_message_text("Clique pour ouvrir la MiniApp :", reply_markup=btn)
+        url = f"{PUBLIC_BASE_URL}/app?uid={uid}&nonce={nonce}"
+        btn = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Ouvrir MiniApp", web_app=WebAppInfo(url=url))]])
+        await query.edit_message_text("Ouvre ta MiniApp :", reply_markup=btn)
 
-# --- Run bot ---
 def run_bot():
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(menu_handler))
-    application.run_polling()
+    app_tg = Application.builder().token(TELEGRAM_TOKEN).build()
+    app_tg.add_handler(CommandHandler("start", start))
+    app_tg.add_handler(CallbackQueryHandler(menu_handler))
+    app_tg.run_polling()
 
-# --- Run Flask ---
-def run():
+def run_flask():
     app.run(host="0.0.0.0", port=8080)
 
 def keep_alive():
-    Thread(target=run).start()
+    Thread(target=run_flask).start()
 
 if __name__ == "__main__":
     keep_alive()
