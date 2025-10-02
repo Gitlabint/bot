@@ -2,14 +2,14 @@
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>Mini App - Profil</title>
+  <title>Mini App</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     body { font-family: Arial, sans-serif; background:#f0f0f0; margin:0; padding:20px; }
     .card { background:white; padding:20px; margin-bottom:20px; border-radius:12px; box-shadow:0 2px 6px rgba(0,0,0,0.1);}
     h2 { margin-top:0; }
-    svg { display:block; margin:0 auto; }
+    img.watch { display:block; margin:0 auto; max-width:220px; }
     .btn { display:inline-block; padding:10px 14px; margin:6px; background:#0088cc; color:white; border-radius:8px; text-decoration:none; cursor:pointer;}
     .btn:hover { background:#0077bb; }
   </style>
@@ -18,25 +18,16 @@
   <div class="card">
     <h2>👤 Profil</h2>
     <p id="wallet">Wallet: ...</p>
-    <p id="ref">Code Referral: ...</p>
-    <a id="shareBtn" class="btn">🔗 Partager mon lien</a>
+    <p>Code Referral: <span id="ref"></span></p>
+    <a id="shareBtn" class="btn">🔗 Partager</a>
   </div>
 
   <div class="card">
-    <h2>⌚ Mon Avatar (Montre)</h2>
-    <svg id="watch" width="200" height="200" viewBox="0 0 200 200">
-      <circle id="cadran" cx="100" cy="100" r="90" fill="white" stroke="black" stroke-width="4"/>
-      <line id="aiguille-heure" x1="100" y1="100" x2="100" y2="40" stroke="black" stroke-width="4"/>
-      <line id="aiguille-minute" x1="100" y1="100" x2="150" y2="100" stroke="black" stroke-width="2"/>
-      <rect id="bracelet-haut" x="80" y="0" width="40" height="40" fill="brown"/>
-      <rect id="bracelet-bas" x="80" y="160" width="40" height="40" fill="brown"/>
-    </svg>
-
+    <h2>⌚ Mon Avatar</h2>
+    <img src="/static/watch.png" alt="Montre Avatar" class="watch"/>
     <div>
-      <button class="btn" onclick="setCadran('blanc')">Cadran Blanc</button>
-      <button class="btn" onclick="setCadran('noir')">Cadran Noir</button>
-      <button class="btn" onclick="setBracelet('cuir')">Bracelet Cuir</button>
-      <button class="btn" onclick="setBracelet('metal')">Bracelet Métal</button>
+      <button class="btn" onclick="setAvatar('bracelet_cuir')">Bracelet Cuir</button>
+      <button class="btn" onclick="setAvatar('bracelet_metal')">Bracelet Métal</button>
     </div>
   </div>
 
@@ -48,58 +39,31 @@
 
 <script>
 const uid = new URLSearchParams(window.location.search).get("uid");
-let public_base = "{{public_base}}";
+const public_base = "{{public_base}}";
 
-// Charger infos utilisateur
 async function loadUser() {
   let res = await fetch(`/user/${uid}`);
   let data = await res.json();
   document.getElementById("wallet").textContent = "Wallet: " + (data.wallet || "non défini");
-  document.getElementById("ref").textContent = "Code Referral: " + data.personal_code;
+  document.getElementById("ref").textContent = data.personal_code;
 
-  // Lien de partage
   let link = `${public_base}/app?ref=${data.personal_code}`;
   document.getElementById("shareBtn").onclick = () => {
     if (window.Telegram && Telegram.WebApp) {
-      Telegram.WebApp.shareLink(link, "🔥 Rejoins-moi sur le bot !");
+      Telegram.WebApp.shareLink(link, "🔥 Rejoins-moi !");
     } else {
       navigator.clipboard.writeText(link);
       alert("Lien copié: " + link);
     }
   };
-
-  // Avatar couleurs
-  applyAvatar(data.avatar);
 }
 
-function applyAvatar(av) {
-  if (av.cadran === "noir") {
-    document.getElementById("cadran").setAttribute("fill", "black");
-  } else {
-    document.getElementById("cadran").setAttribute("fill", "white");
-  }
-  if (av.bracelet === "metal") {
-    document.getElementById("bracelet-haut").setAttribute("fill", "gray");
-    document.getElementById("bracelet-bas").setAttribute("fill", "gray");
-  } else {
-    document.getElementById("bracelet-haut").setAttribute("fill", "brown");
-    document.getElementById("bracelet-bas").setAttribute("fill", "brown");
-  }
-}
-
-async function setCadran(val) {
+async function setAvatar(style) {
   await fetch("/update_avatar", {
     method:"POST", headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({uid: uid, cadran: val, bracelet:"cuir", aiguilles:"standard"})
+    body:JSON.stringify({uid: uid, avatar_style: style})
   });
-  loadUser();
-}
-async function setBracelet(val) {
-  await fetch("/update_avatar", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({uid: uid, cadran:"blanc", bracelet:val, aiguilles:"standard"})
-  });
-  loadUser();
+  alert("Avatar mis à jour !");
 }
 
 loadUser();
