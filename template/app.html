@@ -1,292 +1,149 @@
-# main.py
-import os
-import sqlite3
-import json
-import secrets
+from flask import Flask, request, redirect, url_for, session, render_template, jsonify
 from threading import Thread
-from flask import (
-    Flask, request, redirect, url_for, session,
-    render_template_string, jsonify, make_response
-)
-from telegram import (
-    InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-)
-from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    ContextTypes, MessageHandler, filters
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+import sqlite3
+import random
+import string
+import os
+import requests
+import secrets
 
-# ------------------------
-# Configuration / ENV
-# ------------------------
+# === CONFIG ===
+app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET", "supersecret")
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # ex: https://myapp.example.com
-FLASK_SECRET = os.getenv("FLASK_SECRET", "changeme")
-API_SECRET = os.getenv("API_SECRET", "apisecret")
-BOT_USERNAME = os.getenv("BOT_USERNAME", "")  # sans '@'
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # ex: https://xxx.onrender.com
+BOT_USERNAME = os.getenv("BOT_USERNAME", "MyMiningBot")
+API_SECRET = os.getenv("API_SECRET", "change_this")
 
 if not TELEGRAM_TOKEN or not PUBLIC_BASE_URL:
-    raise ValueError("Please set TELEGRAM_TOKEN and PUBLIC_BASE_URL environment variables.")
+    raise ValueError("TELEGRAM_TOKEN and PUBLIC_BASE_URL must be set in env")
 
-# ------------------------
-# Flask app
-# ------------------------
-app = Flask(__name__)
-app.secret_key = FLASK_SECRET
-
-# small icon (png bytes) used for manifest (keeps manifest valid)
-ICON_BYTES = bytes.fromhex(
-    "89504E470D0A1A0A0000000D4948445200000001000000010806000000"
-    "1F15C4890000000A49444154789C6360000002000154A24F6500000000"
-    "49454E44AE426082"
-)
-
-@app.route('/static/ton-icon.png')
-def ton_icon():
-    resp = make_response(ICON_BYTES)
-    resp.headers["Content-Type"] = "image/png"
-    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-    return resp
-
-# TON Connect manifest
-@app.route('/ton/manifest.json')
-def ton_manifest():
-    manifest = {
-        "url": PUBLIC_BASE_URL,
-        "name": "Endorisum Bot1",
-        "iconUrl": f"{PUBLIC_BASE_URL}/static/ton-icon.png",
-        "termsOfUseUrl": f"{PUBLIC_BASE_URL}/terms",
-        "privacyPolicyUrl": f"{PUBLIC_BASE_URL}/privacy"
-    }
-    return jsonify(manifest)
-
-# Simple TON connect page (uses TON Connect UI)
-CONNECT_HTML = """ (omitted here for brevity - use your existing CONNECT_HTML from previous working version) """
-# NOTE: Insert the same CONNECT_HTML you already had, keeping the JS that POSTs to /ton/submit
-# Make sure the template placeholder variables {{uid}} and {{nonce}} and {{ manifest_abs }} are present.
-
-def manifest_abs_url():
-    return f"{PUBLIC_BASE_URL}/ton/manifest.json"
-
-@app.route('/ton/connect')
-def ton_connect_page():
-    uid = request.args.get("uid", "").strip()
-    nonce = request.args.get("nonce", "").strip()
-    ref = request.args.get("ref", "").strip()  # optional referral code when opening page directly
-    if not uid.isdigit() or not nonce:
-        return "Paramètres invalides", 400
-    # render CONNECT_HTML with uid/nonce and manifest URL; include ref if present for JS to POST
-    return render_template_string(CONNECT_HTML, uid=uid, nonce=nonce, manifest_abs=manifest_abs_url(), ref=ref)
-
-# ------------------------
-# Database (SQLite simple)
-# ------------------------
+# === DB SETUP ===
 DB_FILE = "bot.db"
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 cursor = conn.cursor()
-
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS users (
     telegram_id INTEGER PRIMARY KEY,
     wallet_address TEXT,
     personal_code TEXT UNIQUE,
-    referral_code_used TEXT
+    referral_code_used TEXT,
+    avatar_cadran TEXT DEFAULT 'classique',
+    avatar_bracelet TEXT DEFAULT 'cuir',
+    avatar_aiguilles TEXT DEFAULT 'standard'
 )
 ''')
 conn.commit()
 
-# utils DB
 def generate_referral_code(length=6):
-    return secrets.token_hex(3).upper()  # ~6 hex chars; you can change to letters/digits if desired
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
-def ensure_user_row(tg_id: int):
-    cursor.execute("INSERT OR IGNORE INTO users (telegram_id, personal_code) VALUES (?, ?)",
-                   (tg_id, generate_referral_code()))
+def add_user(telegram_id, wallet_address):
+    personal_code = generate_referral_code()
+    cursor.execute("""
+        INSERT OR IGNORE INTO users (telegram_id, wallet_address, personal_code)
+        VALUES (?, ?, ?)
+    """, (telegram_id, wallet_address, personal_code))
     conn.commit()
 
-def set_referral_for_user(tg_id: int, ref_code: str):
-    # set referral_code_used if not already set
-    cursor.execute("SELECT referral_code_used FROM users WHERE telegram_id=?", (tg_id,))
-    r = cursor.fetchone()
-    if r and r[0]:
-        return
-    cursor.execute("INSERT OR IGNORE INTO users (telegram_id, personal_code) VALUES (?, ?)",
-                   (tg_id, generate_referral_code()))
-    cursor.execute("UPDATE users SET referral_code_used=? WHERE telegram_id=?", (ref_code, tg_id))
+def is_user_registered(user_id):
+    cursor.execute("SELECT 1 FROM users WHERE telegram_id=?", (user_id,))
+    return cursor.fetchone() is not None
+
+def get_user(user_id):
+    cursor.execute("SELECT * FROM users WHERE telegram_id=?", (user_id,))
+    return cursor.fetchone()
+
+def update_avatar(user_id, cadran, bracelet, aiguilles):
+    cursor.execute("""
+        UPDATE users SET avatar_cadran=?, avatar_bracelet=?, avatar_aiguilles=?
+        WHERE telegram_id=?
+    """, (cadran, bracelet, aiguilles, user_id))
     conn.commit()
 
-def set_wallet_for_user(tg_id: int, address: str):
-    cursor.execute("INSERT OR IGNORE INTO users (telegram_id, personal_code) VALUES (?, ?)",
-                   (tg_id, generate_referral_code()))
-    cursor.execute("UPDATE users SET wallet_address=? WHERE telegram_id=?", (address, tg_id))
-    conn.commit()
+# === FLASK ROUTES ===
+@app.route("/")
+def home():
+    return "Bot1 + MiniApp running"
 
-def get_personal_code_for(tg_id: int):
-    cursor.execute("SELECT personal_code FROM users WHERE telegram_id=?", (tg_id,))
-    r = cursor.fetchone()
-    if r:
-        return r[0]
-    # create if not exists
-    code = generate_referral_code()
-    cursor.execute("INSERT OR REPLACE INTO users (telegram_id, personal_code) VALUES (?, ?)", (tg_id, code))
-    conn.commit()
-    return code
+@app.route("/app")
+def mini_app():
+    uid = request.args.get("uid")
+    if not uid:
+        return "Missing uid", 400
+    return render_template("app.html", uid=uid, public_base=PUBLIC_BASE_URL)
 
-# ------------------------
-# TON submit endpoint
-# ------------------------
-# JS TON Connect will POST { uid, nonce, address, maybe ref }
-@app.route("/ton/submit", methods=["POST", "OPTIONS"])
-def ton_submit():
-    if request.method == "OPTIONS":
-        return ("", 204)
-    try:
-        data = request.get_json() or {}
-        uid = int(data.get("uid") or 0)
-        address = (data.get("address") or "").strip()
-        ref = (data.get("ref") or "").strip()  # optional referral code passed from page
-        if not uid or not address:
-            return jsonify({"ok": False, "error": "missing"}), 400
-
-        # write wallet
-        set_wallet_for_user(uid, address)
-        # if ref provided, set referral_code_used for this uid
-        if ref:
-            set_referral_for_user(uid, ref)
-
-        # push immediate menu message to user to reflect "inscrit"
-        # we send message via Telegram sendMessage with inline keyboard for menu (text + markup)
-        menu_text = "🔗 Wallet TON reçu: {}\n✅ Inscription enregistrée.\n\nBienvenue !".format(address)
-        menu_kb = build_menu_markup_dict(True)
-        send_telegram_message(uid, menu_text, menu_kb)
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-@app.route("/ton/submit", methods=["GET"])
-def ton_submit_get():
-    return ("This endpoint accepts POST JSON {uid, address, ref?}.", 405)
-
-# ------------------------
-# Telegram helpers: send message & build menu
-# ------------------------
-def build_menu_markup_dict(is_registered: bool) -> dict:
-    if not is_registered:
-        return {
-            "inline_keyboard": [
-                [{"text": "🔗 Connect TON Wallet", "callback_data": "connect"}],
-                [{"text": "🔗 Share referral", "callback_data": "share_ref"}]
-            ]
+@app.route("/user/<int:uid>")
+def get_user_data(uid):
+    cursor.execute("SELECT telegram_id, wallet_address, personal_code, referral_code_used, avatar_cadran, avatar_bracelet, avatar_aiguilles FROM users WHERE telegram_id=?", (uid,))
+    row = cursor.fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({
+        "telegram_id": row[0],
+        "wallet": row[1],
+        "personal_code": row[2],
+        "referral_code_used": row[3],
+        "avatar": {
+            "cadran": row[4],
+            "bracelet": row[5],
+            "aiguilles": row[6]
         }
-    else:
-        return {
-            "inline_keyboard": [
-                [{"text": "📊 Profil", "callback_data": "profil"}, {"text": "🏭 Mines", "callback_data": "mines"}],
-                [{"text": "🔗 Share referral", "callback_data": "share_ref"}]
-            ]
-        }
+    })
 
-def send_telegram_message(user_id, text, reply_markup=None):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": user_id, "text": text}
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-    try:
-        requests.post(url, json=payload, timeout=5)
-    except Exception as e:
-        print("Erreur envoi message:", e)
+@app.route("/update_avatar", methods=["POST"])
+def update_avatar_api():
+    data = request.get_json() or {}
+    uid = data.get("uid")
+    cadran = data.get("cadran")
+    bracelet = data.get("bracelet")
+    aiguilles = data.get("aiguilles")
+    if not uid:
+        return jsonify({"error": "missing uid"}), 400
+    update_avatar(uid, cadran, bracelet, aiguilles)
+    return jsonify({"ok": True})
 
-# ------------------------
-# Telegram Bot (PTB) - minimal: /start handling to accept referral via deep link
-# ------------------------
-import requests
-from telegram import Update
-from telegram.ext import ApplicationBuilder
+# === BOT ===
+def main_menu():
+    return ("Bienvenue !", InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔗 Connect TON Wallet", callback_data="connect")]
+    ]))
 
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    tg_id = user.id
-    # If start contains an argument, PTB puts it into context.args
-    args = context.args or []
-    # Example deep link: /start refABC123  -> context.args[0] == "refABC123"
-    if args and args[0].startswith("ref"):
-        ref_code = args[0][3:]
-        # ensure row then set referral for this new user
-        ensure_user_row(tg_id)
-        set_referral_for_user(tg_id, ref_code)
-        # reply with connect button (WebApp) to open TON connect directly (WebApp)
-        nonce = secrets.token_hex(8)
-        connect_url = f"{PUBLIC_BASE_URL}/ton/connect?uid={tg_id}&nonce={nonce}&ref={ref_code}"
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Connect TON Wallet", web_app=WebAppInfo(url=connect_url))]])
-        await update.message.reply_text("Bienvenue ! Clique pour connecter ton wallet via TON Connect :", reply_markup=kb)
-        return
-    # Normal start (no referral)
-    ensure_user_row(tg_id)
-    # show connect / share referral options
-    personal_code = get_personal_code_for(tg_id)
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔗 Connect TON Wallet", web_app=WebAppInfo(url=f"{PUBLIC_BASE_URL}/ton/connect?uid={tg_id}&nonce={secrets.token_hex(8)}"))],
-        [InlineKeyboardButton("🔗 Share referral", callback_data="share_ref")]
-    ])
-    await update.message.reply_text("Bienvenue !", reply_markup=kb)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text, kb = main_menu()
+    await update.message.reply_text(text, reply_markup=kb)
 
-async def cb_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data or ""
-    user = query.from_user
-    tg_id = user.id
+    user_id = query.from_user.id
+    action = query.data
 
-    if data == "connect":
-        # open webapp (if not already provided); send an edit message with WebApp button
+    if action == "connect":
         nonce = secrets.token_hex(8)
-        connect_url = f"{PUBLIC_BASE_URL}/ton/connect?uid={tg_id}&nonce={nonce}"
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Connect TON Wallet", web_app=WebAppInfo(url=connect_url))],
-                                   [InlineKeyboardButton("⬅️ Retour", callback_data="menu")]])
-        await query.edit_message_text("Clique pour connecter ton wallet :", reply_markup=kb)
-    elif data == "share_ref":
-        # generate deep link to share: use user's personal_code
-        personal_code = get_personal_code_for(tg_id)
-        # Deep link: t.me/BOT_USERNAME?start=ref<PERSONAL_CODE>
-        if BOT_USERNAME:
-            share_link = f"https://t.me/{BOT_USERNAME}?start=ref{personal_code}"
-            await query.edit_message_text(f"Partage ce lien pour parrainer :\n{share_link}")
-        else:
-            await query.edit_message_text("BOT_USERNAME non configuré sur le serveur; impossible de générer le deep link.")
-    elif data == "menu":
-        # show simple menu again
-        personal_code = get_personal_code_for(tg_id)
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 Connect TON Wallet", web_app=WebAppInfo(url=f"{PUBLIC_BASE_URL}/ton/connect?uid={tg_id}&nonce={secrets.token_hex(8)}"))],
-            [InlineKeyboardButton("🔗 Share referral", callback_data="share_ref")]
-        ])
-        await query.edit_message_text("Menu :", reply_markup=kb)
-    elif data == "profil":
-        # display simple profile with wallet/ref info
-        cursor.execute("SELECT wallet_address, personal_code, referral_code_used FROM users WHERE telegram_id=?", (tg_id,))
-        row = cursor.fetchone()
-        wallet = row[0] if row else None
-        personal = row[1] if row else None
-        used = row[2] if row else None
-        text = f"Profil:\nWallet: {wallet or '—'}\nTon code: {personal or '—'}\nParrain: {used or '—'}"
-        await query.edit_message_text(text)
-    else:
-        await query.answer("Action inconnue")
+        connect_url = f"{PUBLIC_BASE_URL}/app?uid={user_id}&nonce={nonce}"
+        btn = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🚀 Ouvrir MiniApp", web_app=WebAppInfo(url=connect_url))
+        ]])
+        await query.edit_message_text("Clique pour ouvrir la MiniApp :", reply_markup=btn)
 
-# ------------------------
-# Run bot + flask
-# ------------------------
-def run_flask():
-    app.run(host="0.0.0.0", port=8080)
-
+# === BOT START ===
 def run_bot():
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("start", start_cmd))
-    application.add_handler(CallbackQueryHandler(cb_callback_query))
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(menu_handler))
     application.run_polling()
 
+# === START BOTH ===
+def run():
+    app.run(host="0.0.0.0", port=8080)
+
+def keep_alive():
+    Thread(target=run).start()
+
 if __name__ == "__main__":
-    # start flask in background
-    Thread(target=run_flask, daemon=True).start()
-    # run bot (blocking)
+    keep_alive()
     run_bot()
