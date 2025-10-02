@@ -71,7 +71,7 @@ def home():
 def mini_app():
     uid = request.args.get("uid")
     ref = request.args.get("ref")
-    return render_template("app.html", uid=uid, ref=ref, public_base=PUBLIC_BASE_URL)
+    return render_template("app.html", uid=uid, ref=ref, bot_username=BOT_USERNAME, public_base=PUBLIC_BASE_URL)
 
 @app.route("/api/me")
 def api_me():
