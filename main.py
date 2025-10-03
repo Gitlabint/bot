@@ -1,464 +1,234 @@
-# main.py
-import os
-import sqlite3
-import json
-import secrets
-import requests
-from threading import Thread
-from flask import (
-    Flask, request, redirect, url_for, session,
-    render_template_string, jsonify, make_response
-)
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler
-
-# ---------------------------
-# Config / env
-# ---------------------------
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # ex: https://monapp.example.com
-FLASK_SECRET = os.getenv("FLASK_SECRET", "please-set-flask-secret")
-BOT_USERNAME = os.getenv("BOT_USERNAME", "")
-API_SECRET = os.getenv("API_SECRET", "")
-TONAPI_KEY = os.getenv("TONAPI_KEY")  # optionnel
-
-if not TELEGRAM_TOKEN:
-    raise RuntimeError("TELEGRAM_TOKEN manquant dans l'environnement.")
-if not PUBLIC_BASE_URL:
-    raise RuntimeError("PUBLIC_BASE_URL manquant (doit être HTTPS public).")
-
-# ---------------------------
-# Flask app
-# ---------------------------
-app = Flask(__name__)
-app.secret_key = FLASK_SECRET
-
-# tiny inline PNG icon (1x1 sample) -> remplace si tu veux vrai fichier
-ICON_BYTES = bytes.fromhex(
-    "89504E470D0A1A0A0000000D4948445200000001000000010806000000"
-    "1F15C4890000000A49444154789C6360000002000154A24F6500000000"
-    "49454E44AE426082"
-)
-
-@app.route("/static/ton-icon.png")
-def ton_icon():
-    resp = make_response(ICON_BYTES)
-    resp.headers["Content-Type"] = "image/png"
-    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-    return resp
-
-# manifest required by TON Connect
-@app.route("/ton/manifest.json")
-def ton_manifest():
-    manifest = {
-        "url": PUBLIC_BASE_URL,
-        "name": "Endorisum Bot1",
-        "iconUrl": f"{PUBLIC_BASE_URL}/static/ton-icon.png",
-        "termsOfUseUrl": f"{PUBLIC_BASE_URL}/terms",
-        "privacyPolicyUrl": f"{PUBLIC_BASE_URL}/privacy"
-    }
-    return jsonify(manifest)
-
-# alias well-known + common typos to reduce 404 problems
-@app.route("/.well-known/tonconnect-manifest.json")
-def ton_manifest_wellknown():
-    return ton_manifest()
-
-@app.route("/manifest.json")
-def ton_manifest_root_alias():
-    return ton_manifest()
-
-@app.route("/ton/manifest.sjon")
-def ton_manifest_typo_alias():
-    return redirect("/ton/manifest.json")
-
-# ---------------------------
-# Simple TON Connect page (WebApp / stand-alone)
-# ---------------------------
-CONNECT_HTML = """
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>Connect TON Wallet</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+  <title>Endorisum Mini-App</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://unpkg.com/three@0.158.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.158.0/examples/js/controls/OrbitControls.js"></script>
   <style>
-    body{font-family:Arial,Helvetica,sans-serif;padding:18px;background:#f7f9fc;color:#0b1220}
-    .box{max-width:720px;margin:0 auto;background:#fff;padding:18px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.06)}
-    button{padding:10px 14px;border-radius:8px;border:none;background:#2b6cff;color:white;cursor:pointer}
-    .muted{color:#666;font-size:13px}
+    :root{ --bg:#0f1115; --card:#161a22; --text:#e8eefb; --muted:#9aa7bd; --acc:#5b8cff; }
+    *{ box-sizing:border-box }
+    body{ margin:0; background:var(--bg); color:var(--text); font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial }
+    header{ padding:16px; display:flex; align-items:center; gap:12px; border-bottom:1px solid #232835; }
+    header h1{ font-size:16px; margin:0; font-weight:600; }
+    main{ padding:16px; display:grid; gap:16px; max-width:1024px; margin:0 auto }
+    .tabs{ display:flex; gap:8px; flex-wrap:wrap }
+    .tab{ background:#1b2130; border:1px solid #2a3244; color:var(--text); padding:10px 14px; border-radius:10px; cursor:pointer }
+    .tab.active{ background:var(--acc); border-color:var(--acc); color:#fff }
+    .card{ background:var(--card); border:1px solid #2a3244; border-radius:16px; padding:16px }
+    .row{ display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start }
+    .col{ flex:1 1 320px }
+    .label{ font-size:12px; color:var(--muted) }
+    .val{ font-size:14px; margin:2px 0 10px }
+    .btn{ background:#1e2636; border:1px solid #2a3244; color:var(--text); padding:10px 12px; border-radius:10px; cursor:pointer }
+    .btn.primary{ background:var(--acc); border-color:var(--acc); color:#fff }
+    .outfits{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px }
+    .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px }
+    .nft{ background:#0f131c; border:1px solid #2a3244; border-radius:12px; padding:8px; text-align:center }
+    .nft img{ width:100%; height:120px; object-fit:cover; border-radius:8px; background:#090c12 }
+    #avatarWrap{ height:340px; background:#0b0e15; border:1px solid #2a3244; border-radius:12px; overflow:hidden }
+    footer{ padding:16px; text-align:center; color:var(--muted); font-size:12px }
+    a{ color:#aecdff; text-decoration:none }
   </style>
 </head>
 <body>
-  <div class="box">
-    <h2>Connect TON Wallet</h2>
-    <p class="muted">Liaison sécurisé de ton wallet TON au bot. Après connexion ton wallet sera enregistré et tu recevras le menu mis à jour dans Telegram.</p>
-    <div id="ton-connect"></div>
-    <div id="status" style="margin-top:12px;color:green"></div>
-    <div id="error" style="margin-top:12px;color:red"></div>
-  </div>
+  <header>
+    <h1>Endorisum • Mini-App</h1>
+  </header>
 
-  <script>
-  (function(){
-    const uid = "{{uid}}";
-    const nonce = "{{nonce}}";
-    const manifest = "{{manifest}}";
-    const statusEl = document.getElementById("status");
-    const errorEl = document.getElementById("error");
+  <main>
+    <div class="tabs">
+      <button class="tab active" data-pane="profile">👤 Profil</button>
+      <button class="tab" data-pane="mines">⛏️ Mines</button>
+      <button class="tab" data-pane="settings">⚙️ Paramètres</button>
+      <button class="tab" data-pane="danger">❌ Se désinscrire</button>
+    </div>
 
-    async function pingManifest(){
-      try {
-        const r = await fetch(manifest, {cache:'no-store'});
-        if (!r.ok) throw new Error("manifest HTTP " + r.status);
-        await r.json();
-        return true;
-      } catch(e) {
-        errorEl.textContent = "Manifest inaccessible: " + e.message;
-        return false;
-      }
+    <!-- Profil -->
+    <section class="card" id="pane-profile">
+      <div class="row">
+        <div class="col">
+          <div class="label">Telegram ID</div>
+          <div class="val" id="tgid">—</div>
+          <div class="label">Wallet TON</div>
+          <div class="val" id="wallet">—</div>
+          <div class="label">Code de parrainage</div>
+          <div class="val"><span id="code">—</span> <button class="btn" id="btnShare">Partager</button></div>
+          <div class="label">Total pioches</div>
+          <div class="val" id="pioches">0</div>
+        </div>
+        <div class="col">
+          <div id="avatarWrap"></div>
+          <div style="margin-top:10px; display:flex; gap:8px;">
+            <button class="btn" id="btnLeft">↺ Tourner</button>
+            <button class="btn" id="btnRight">↻ Tourner</button>
+            <button class="btn primary" id="btnCenter">Centrer</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <div class="label" style="margin-bottom:6px">NFT du wallet</div>
+        <div class="grid" id="nfts"></div>
+      </div>
+    </section>
+
+    <!-- Mines -->
+    <section class="card" id="pane-mines" style="display:none">
+      <div class="grid" id="mines"></div>
+    </section>
+
+    <!-- Settings -->
+    <section class="card" id="pane-settings" style="display:none">
+      <div class="label">Bracelet</div>
+      <div class="outfits">
+        <button class="btn outfit" data-type="bracelet" data-val="metal">Métal</button>
+        <button class="btn outfit" data-type="bracelet" data-val="leather">Cuir</button>
+      </div>
+      <div style="margin-top:12px">
+        <button class="btn primary" id="saveOutfit">💾 Enregistrer</button>
+      </div>
+    </section>
+
+    <!-- Danger -->
+    <section class="card" id="pane-danger" style="display:none">
+      <p>Se désinscrire supprimera tes données du jeu (wallet associé, avatar, etc.).</p>
+      <button class="btn" id="btnUnsub">❌ Confirmer la désinscription</button>
+    </section>
+  </main>
+
+  <footer>© Endorisum</footer>
+
+<script>
+(function(){
+  const qs = new URLSearchParams(window.location.search);
+  const uid = qs.get("uid");
+  if(!uid){ document.body.innerHTML = "<p style='padding:16px'>Bad UID</p>"; return; }
+
+  const tgid = document.getElementById('tgid');
+  const wallet = document.getElementById('wallet');
+  const code = document.getElementById('code');
+  const pioches = document.getElementById('pioches');
+  const nftsWrap = document.getElementById('nfts');
+  const minesWrap = document.getElementById('mines');
+
+  const tabs = document.querySelectorAll(".tab");
+  const panes = {
+    profile: document.getElementById('pane-profile'),
+    mines: document.getElementById('pane-mines'),
+    settings: document.getElementById('pane-settings'),
+    danger: document.getElementById('pane-danger'),
+  };
+  tabs.forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      tabs.forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      for (const k in panes) panes[k].style.display = "none";
+      panes[btn.dataset.pane].style.display = "block";
+      if (btn.dataset.pane === 'mines') loadMines();
+    });
+  });
+
+  let scene, camera, renderer, avatarGroup;
+  function createAvatar(bracelet="metal"){
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b0e15);
+
+    const w = document.getElementById('avatarWrap').clientWidth;
+    const h = document.getElementById('avatarWrap').clientHeight;
+
+    camera = new THREE.PerspectiveCamera(35, w/h, 0.1, 100);
+    camera.position.set(0, 0, 3);
+
+    renderer = new THREE.WebGLRenderer({ antialias:true });
+    renderer.setSize(w, h);
+    const wrap = document.getElementById('avatarWrap');
+    wrap.innerHTML = "";
+    wrap.appendChild(renderer.domElement);
+
+    const amb = new THREE.AmbientLight(0xffffff, 0.8); scene.add(amb);
+
+    avatarGroup = new THREE.Group(); scene.add(avatarGroup);
+
+    const tex = new THREE.TextureLoader().load('/static/watch.png');
+    const mat = new THREE.MeshStandardMaterial({map:tex});
+    if (bracelet==="leather"){
+      mat.color = new THREE.Color(0x5a3825);
+      mat.metalness = 0.1;
+      mat.roughness = 0.9;
     }
+    const watch = new THREE.Mesh(new THREE.CircleGeometry(1.5,64), mat);
+    avatarGroup.add(watch);
 
-    async function init(){
-      if (typeof TON_CONNECT_UI === 'undefined' || !TON_CONNECT_UI.TonConnectUI){
-        errorEl.textContent = "CDN TON Connect non chargé.";
-        return;
-      }
-      const ok = await pingManifest();
-      if (!ok) return;
+    (function anim(){ requestAnimationFrame(anim); renderer.render(scene,camera); })();
+    document.getElementById('btnLeft').onclick = ()=> avatarGroup.rotation.y -= 0.3;
+    document.getElementById('btnRight').onclick = ()=> avatarGroup.rotation.y += 0.3;
+    document.getElementById('btnCenter').onclick = ()=> avatarGroup.rotation.y = 0;
+  }
 
-      const ui = new TON_CONNECT_UI.TonConnectUI({
-        manifestUrl: manifest,
-        buttonRootId: "ton-connect"
-      });
+  let avatar = { bracelet:'metal' };
 
-      ui.onStatusChange(async (walletInfo) => {
-        if (!walletInfo || !walletInfo.account) return;
-        const addr = walletInfo.account.address;
-        statusEl.textContent = "Connecté — " + addr;
-        try {
-          const r = await fetch("/ton/submit", {
-            method: "POST",
-            headers: {"Content-Type":"application/json"},
-            body: JSON.stringify({ uid: uid, nonce: nonce, address: addr })
-          });
-          const d = await r.json();
-          if (d.ok) {
-            statusEl.textContent = "Adresse enregistrée ✅. Tu peux fermer cette page.";
-            // if in Telegram WebApp try to close
-            try { if (window.Telegram && Telegram.WebApp) Telegram.WebApp.close(); } catch(e){}
-          } else {
-            errorEl.textContent = d.error || "Erreur enregistrement";
-          }
-        } catch(e) {
-          errorEl.textContent = "Erreur réseau lors de l'enregistrement";
-        }
-      });
+  async function loadMe(){
+    const r = await fetch(`/api/me?uid=${uid}`, {cache:'no-store'});
+    const data = await r.json();
+    if (!data.registered){
+      document.body.innerHTML = "<p style='padding:16px'>Non inscrit.</p>";
+      return;
     }
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-    else init();
-  })();
-  </script>
+    tgid.textContent = data.telegram_id;
+    wallet.textContent = data.wallet_address || '—';
+    code.textContent = data.personal_code || '—';
+    pioches.textContent = data.pioches_total || 0;
+    avatar = data.avatar || avatar;
+
+    nftsWrap.innerHTML = "";
+    (data.nfts||[]).forEach(n=>{
+      const div = document.createElement('div');
+      div.className='nft';
+      div.innerHTML=`<img src="${n.image}"><div>${n.name}</div>`;
+      nftsWrap.appendChild(div);
+    });
+
+    createAvatar(avatar.bracelet);
+  }
+
+  async function loadMines(){
+    const r = await fetch('/api/mines'); const data = await r.json();
+    minesWrap.innerHTML="";
+    (data.mines||[]).forEach(m=>{
+      const a=document.createElement('a'); a.className='btn'; a.href=m.url; a.textContent=m.title; a.target="_blank";
+      minesWrap.appendChild(a);
+    });
+  }
+
+  document.querySelectorAll('.outfit').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const t=btn.dataset.type; const v=btn.dataset.val;
+      avatar[t]=v; createAvatar(avatar.bracelet);
+    });
+  });
+
+  document.getElementById('saveOutfit').addEventListener('click', async ()=>{
+    await fetch('/api/avatar/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,...avatar})});
+  });
+
+  document.getElementById('btnUnsub').addEventListener('click', async ()=>{
+    const ok=confirm("Confirmer la désinscription ?"); if(!ok) return;
+    await fetch('/api/unsubscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})});
+    alert("Compte supprimé."); if (Telegram?.WebApp) Telegram.WebApp.close();
+  });
+
+  document.getElementById('btnShare').addEventListener('click', ()=>{
+    const link=`https://t.me/${"{{bot_username}}"}?startapp=${code.textContent.trim()}`;
+    if (navigator.share){ navigator.share({title:"Rejoins-moi",text:"Utilise mon code Endorisum",url:link}); }
+    else { prompt("Copie ce lien :", link); }
+  });
+
+  if (Telegram?.WebApp){ Telegram.WebApp.expand(); Telegram.WebApp.ready(); }
+  loadMe();
+})();
+</script>
 </body>
 </html>
-"""
-
-@app.route("/ton/connect")
-def ton_connect_page():
-    uid = request.args.get("uid", "").strip()
-    nonce = request.args.get("nonce", "").strip()
-    if not uid.isdigit() or not nonce:
-        return "Paramètres invalides", 400
-    return render_template_string(
-        CONNECT_HTML,
-        uid=uid,
-        nonce=nonce,
-        manifest=f"{PUBLIC_BASE_URL}/ton/manifest.json"
-    )
-
-# ---------------------------
-# DB init
-# ---------------------------
-DB_FILE = os.getenv("DB_FILE", "bot.db")
-conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-c = conn.cursor()
-c.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    telegram_id INTEGER PRIMARY KEY,
-    wallet_address TEXT,
-    personal_code TEXT UNIQUE,
-    referral_code_used TEXT,
-    hat TEXT DEFAULT 'none',
-    jacket TEXT DEFAULT 'none',
-    pants TEXT DEFAULT 'none',
-    shoes TEXT DEFAULT 'none',
-    bracelet TEXT DEFAULT 'none'
-)
-""")
-conn.commit()
-
-# ---------------------------
-# Helpers
-# ---------------------------
-def generate_referral_code(length=6):
-    import random, string
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
-
-def is_user_registered(tg_id: int) -> bool:
-    c.execute("SELECT 1 FROM users WHERE telegram_id=?", (tg_id,))
-    return c.fetchone() is not None
-
-def upsert_user_wallet(tg_id: int, address: str):
-    c.execute("SELECT personal_code FROM users WHERE telegram_id=?", (tg_id,))
-    row = c.fetchone()
-    if row:
-        c.execute("UPDATE users SET wallet_address=? WHERE telegram_id=?", (address, tg_id))
-    else:
-        pc = generate_referral_code()
-        c.execute("INSERT INTO users (telegram_id, wallet_address, personal_code) VALUES (?, ?, ?)", (tg_id, address, pc))
-    conn.commit()
-
-def get_user_row(tg_id: int):
-    c.execute("SELECT telegram_id, wallet_address, personal_code, referral_code_used, hat, jacket, pants, shoes, bracelet FROM users WHERE telegram_id=?", (tg_id,))
-    r = c.fetchone()
-    return r
-
-# ---------------------------
-# TonAPI NFTs (optionnel)
-# ---------------------------
-def fetch_nfts_for_wallet(address: str):
-    if not address:
-        return []
-    if not TONAPI_KEY:
-        return []  # pas de clé → on retourne vide
-    try:
-        # TonAPI endpoint example (v2). Adapter si tu utilises autre service.
-        url = f"https://tonapi.io/v2/accounts/{address}/nfts"
-        h = {"Authorization": f"Bearer {TONAPI_KEY}"}
-        resp = requests.get(url, headers=h, timeout=8)
-        if resp.status_code != 200:
-            return []
-        data = resp.json()
-        items = data.get("nft_items") or data.get("data") or []
-        out = []
-        for it in items:
-            meta = it.get("metadata") or {}
-            image = meta.get("image") or it.get("image") or ""
-            name = meta.get("name") or it.get("name") or "NFT"
-            # avoid returning empty images if absent
-            out.append({"name": name, "image": image})
-        return out
-    except Exception:
-        return []
-
-# ---------------------------
-# Send Telegram message helper (raw HTTP so we can push menus)
-# ---------------------------
-def send_telegram_message_raw(chat_id: int, text: str, reply_markup: dict = None):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-    try:
-        requests.post(url, json=payload, timeout=6)
-    except Exception as e:
-        print("send_telegram_message_raw error:", e)
-
-def build_menu_markup_dict(is_registered: bool) -> dict:
-    if not is_registered:
-        return {
-            "inline_keyboard": [
-                [{"text": "🔗 Connect TON Wallet", "web_app": {"url": f"{PUBLIC_BASE_URL}/ton/connect?uid={{uid}}&nonce={{nonce}}"}}],
-                [{"text": "📊 Profil", "callback_data": "profil"}]
-            ]
-        }
-    else:
-        return {
-            "inline_keyboard": [
-                [{"text":"📊 Profil","callback_data":"profil"}, {"text":"⛏️ Mines","callback_data":"mines"}],
-                [{"text":"🔗 Ouvrir la mini-app","web_app":{"url": f"{PUBLIC_BASE_URL}/app.html?uid={{uid}}"}}]
-            ]
-        }
-
-# ---------------------------
-# ton/submit (POST) — enregistrement & push menu
-# ---------------------------
-@app.route("/ton/submit", methods=["POST", "OPTIONS"])
-def ton_submit():
-    if request.method == "OPTIONS":
-        return ("", 204)
-    try:
-        data = request.get_json() or {}
-        uid = int(data.get("uid") or 0)
-        addr = (data.get("address") or "").strip()
-        if not uid or not addr:
-            return jsonify({"ok": False, "error": "missing uid or address"}), 400
-
-        # Upsert wallet
-        upsert_user_wallet(uid, addr)
-
-        # Push message to user: menu inscrit (we replace placeholders uid/nonce)
-        nonce = secrets.token_hex(8)
-        menu_text = f"🔗 Wallet TON reçu: <code>{addr}</code>\n✅ Inscription enregistrée. Voici ton menu :"
-        markup = build_menu_markup_dict(True)
-        # replace placeholders
-        mk = json.loads(json.dumps(markup).replace("{{uid}}", str(uid)).replace("{{nonce}}", nonce))
-        mk = json.loads(json.dumps(mk).replace("{{uid}}", str(uid)))  # second pass for app url
-        send_telegram_message_raw(uid, menu_text, mk)
-
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-@app.route("/ton/submit", methods=["GET"])
-def ton_submit_get():
-    return ("POST JSON {uid,address}", 405)
-
-# ---------------------------
-# Mini-app / API endpoints used by app.html (serve static app separately)
-# ---------------------------
-# Simple static app.html must be placed in repo under /templates/app.html or generate a simple page here.
-# We'll serve the template from repo's templates/app.html if present; otherwise provide a minimal page.
-from flask import send_from_directory, render_template
-
-@app.route("/app.html")
-def app_html():
-    # try to serve templates/app.html from filesystem if exists (better for customization)
-    try:
-        return render_template("app.html")
-    except Exception:
-        # fallback minimal page (shouldn't normally happen if you deployed template)
-        return "<p>Mini-app manquante. Place ton fichier templates/app.html</p>", 404
-
-@app.route("/api/me")
-def api_me():
-    uid = request.args.get("uid", "").strip()
-    if not uid.isdigit():
-        return jsonify({"registered": False})
-    uid_i = int(uid)
-    row = get_user_row(uid_i)
-    if not row:
-        return jsonify({"registered": False})
-    telegram_id, wallet, personal_code, referral_code_used, hat, jacket, pants, shoes, bracelet = row
-    # NFTs via TonAPI (if configured)
-    nfts = fetch_nfts_for_wallet(wallet) if wallet else []
-    # pioches_total fake for now (bot2 integration can call this with API_SECRET)
-    pioches_total = 0
-    return jsonify({
-        "registered": True,
-        "telegram_id": telegram_id,
-        "wallet_address": wallet,
-        "personal_code": personal_code,
-        "referral_code_used": referral_code_used,
-        "pioches_total": pioches_total,
-        "avatar": {"hat": hat, "jacket": jacket, "pants": pants, "shoes": shoes, "bracelet": bracelet},
-        "nfts": nfts
-    })
-
-@app.route("/api/mines")
-def api_mines():
-    # static list of partner mines — personnalise comme tu veux
-    mines = [
-        {"title":"Mine 1","url":"https://t.me/mine1"},
-        {"title":"Mine 2","url":"https://t.me/mine2"},
-        {"title":"Mine 3","url":"https://t.me/mine3"}
-    ]
-    return jsonify({"mines": mines})
-
-@app.route("/api/avatar/update", methods=["POST"])
-def api_avatar_update():
-    data = request.get_json() or {}
-    uid = int(data.get("uid") or 0)
-    if not uid:
-        return jsonify({"ok": False, "error": "uid required"}), 400
-    hat = data.get("hat", "none")
-    jacket = data.get("jacket", "none")
-    pants = data.get("pants", "none")
-    shoes = data.get("shoes", "none")
-    bracelet = data.get("bracelet", "none")
-    c.execute("""
-        UPDATE users SET hat=?, jacket=?, pants=?, shoes=?, bracelet=? WHERE telegram_id=?
-    """, (hat, jacket, pants, shoes, bracelet, uid))
-    conn.commit()
-    return jsonify({"ok": True})
-
-@app.route("/api/unsubscribe", methods=["POST"])
-def api_unsubscribe():
-    data = request.get_json() or {}
-    uid = int(data.get("uid") or 0)
-    if not uid:
-        return jsonify({"ok": False, "error": "uid required"}), 400
-    c.execute("DELETE FROM users WHERE telegram_id=?", (uid,))
-    conn.commit()
-    # optional: notify user
-    try:
-        send_telegram_message_raw(uid, "🗑️ Ton compte a été supprimé.", None)
-    except:
-        pass
-    return jsonify({"ok": True})
-
-# ---------------------------
-# Small admin pages (optional) - basic authless dashboard (you can protect later)
-# ---------------------------
-DASH_HTML = """
-<!doctype html><html><head><meta charset="utf-8"><title>Dashboard</title></head><body>
-<h2>Users</h2><ul>
-{% for u in users %}<li>{{u[0]}} — {{u[1]}} — {{u[2]}}</li>{% endfor %}
-</ul></body></html>
-"""
-@app.route("/dashboard")
-def dashboard():
-    c.execute("SELECT telegram_id, wallet_address, personal_code FROM users")
-    users = c.fetchall()
-    return render_template_string(DASH_HTML, users=users)
-
-# ---------------------------
-# Telegram bot: minimal handlers (bot sends mini-app via web_app buttons)
-# ---------------------------
-from telegram import Update
-from telegram.ext import ContextTypes
-
-application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    # build menu: single button to open WebApp connect (if not registered) or open mini-app (if registered)
-    registered = is_user_registered(uid)
-    nonce = secrets.token_hex(8)
-    if not registered:
-        btn = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 Connect TON Wallet", web_app=WebAppInfo(url=f"{PUBLIC_BASE_URL}/ton/connect?uid={uid}&nonce={nonce}"))]
-        ])
-        await update.message.reply_text("Bienvenue — clique pour lier ton wallet TON", reply_markup=btn)
-    else:
-        btn = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 Ouvrir la mini-app", web_app=WebAppInfo(url=f"{PUBLIC_BASE_URL}/app.html?uid={uid}"))]
-        ])
-        await update.message.reply_text("Tu es inscrit — ouvre la mini-app :", reply_markup=btn)
-
-async def callback_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    # pour l'instant on propose seulement d'ouvrir la mini-app
-    uid = query.from_user.id
-    await query.edit_message_text("Ouvre la mini-app ci-dessous :", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔗 Ouvrir la mini-app", web_app=WebAppInfo(url=f"{PUBLIC_BASE_URL}/app.html?uid={uid}"))]
-    ]))
-
-application.add_handler(CommandHandler("start", start_cmd))
-application.add_handler(CallbackQueryHandler(callback_menu, pattern=".*"))
-
-# ---------------------------
-# Run Flask + Bot
-# ---------------------------
-def run_flask():
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
-
-def run_bot():
-    # run polling in current thread (Application.run_polling is blocking)
-    application.run_polling()
-
-if __name__ == "__main__":
-    # start flask in background thread
-    Thread(target=run_flask, daemon=True).start()
-    run_bot()
