@@ -1,234 +1,236 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <title>Endorisum Mini-App</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="https://unpkg.com/three@0.158.0/build/three.min.js"></script>
-  <script src="https://unpkg.com/three@0.158.0/examples/js/controls/OrbitControls.js"></script>
-  <style>
-    :root{ --bg:#0f1115; --card:#161a22; --text:#e8eefb; --muted:#9aa7bd; --acc:#5b8cff; }
-    *{ box-sizing:border-box }
-    body{ margin:0; background:var(--bg); color:var(--text); font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial }
-    header{ padding:16px; display:flex; align-items:center; gap:12px; border-bottom:1px solid #232835; }
-    header h1{ font-size:16px; margin:0; font-weight:600; }
-    main{ padding:16px; display:grid; gap:16px; max-width:1024px; margin:0 auto }
-    .tabs{ display:flex; gap:8px; flex-wrap:wrap }
-    .tab{ background:#1b2130; border:1px solid #2a3244; color:var(--text); padding:10px 14px; border-radius:10px; cursor:pointer }
-    .tab.active{ background:var(--acc); border-color:var(--acc); color:#fff }
-    .card{ background:var(--card); border:1px solid #2a3244; border-radius:16px; padding:16px }
-    .row{ display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start }
-    .col{ flex:1 1 320px }
-    .label{ font-size:12px; color:var(--muted) }
-    .val{ font-size:14px; margin:2px 0 10px }
-    .btn{ background:#1e2636; border:1px solid #2a3244; color:var(--text); padding:10px 12px; border-radius:10px; cursor:pointer }
-    .btn.primary{ background:var(--acc); border-color:var(--acc); color:#fff }
-    .outfits{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px }
-    .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px }
-    .nft{ background:#0f131c; border:1px solid #2a3244; border-radius:12px; padding:8px; text-align:center }
-    .nft img{ width:100%; height:120px; object-fit:cover; border-radius:8px; background:#090c12 }
-    #avatarWrap{ height:340px; background:#0b0e15; border:1px solid #2a3244; border-radius:12px; overflow:hidden }
-    footer{ padding:16px; text-align:center; color:var(--muted); font-size:12px }
-    a{ color:#aecdff; text-decoration:none }
-  </style>
-</head>
-<body>
-  <header>
-    <h1>Endorisum • Mini-App</h1>
-  </header>
+# main.py
+import os
+import sqlite3
+import json
+import secrets
+import requests
+from threading import Thread
+from flask import (
+    Flask, request, redirect, url_for, session,
+    render_template_string, jsonify, make_response
+)
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, Update
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-  <main>
-    <div class="tabs">
-      <button class="tab active" data-pane="profile">👤 Profil</button>
-      <button class="tab" data-pane="mines">⛏️ Mines</button>
-      <button class="tab" data-pane="settings">⚙️ Paramètres</button>
-      <button class="tab" data-pane="danger">❌ Se désinscrire</button>
-    </div>
+# ---------------------------
+# Config / env
+# ---------------------------
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # ex: https://monapp.example.com
+FLASK_SECRET = os.getenv("FLASK_SECRET", "please-set-flask-secret")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "")
+API_SECRET = os.getenv("API_SECRET", "")
+TONAPI_KEY = os.getenv("TONAPI_KEY")  # optionnel
 
-    <!-- Profil -->
-    <section class="card" id="pane-profile">
-      <div class="row">
-        <div class="col">
-          <div class="label">Telegram ID</div>
-          <div class="val" id="tgid">—</div>
-          <div class="label">Wallet TON</div>
-          <div class="val" id="wallet">—</div>
-          <div class="label">Code de parrainage</div>
-          <div class="val"><span id="code">—</span> <button class="btn" id="btnShare">Partager</button></div>
-          <div class="label">Total pioches</div>
-          <div class="val" id="pioches">0</div>
-        </div>
-        <div class="col">
-          <div id="avatarWrap"></div>
-          <div style="margin-top:10px; display:flex; gap:8px;">
-            <button class="btn" id="btnLeft">↺ Tourner</button>
-            <button class="btn" id="btnRight">↻ Tourner</button>
-            <button class="btn primary" id="btnCenter">Centrer</button>
-          </div>
-        </div>
-      </div>
+if not TELEGRAM_TOKEN:
+    raise RuntimeError("TELEGRAM_TOKEN manquant dans l'environnement.")
+if not PUBLIC_BASE_URL:
+    raise RuntimeError("PUBLIC_BASE_URL manquant (doit être HTTPS public).")
 
-      <div style="margin-top:12px">
-        <div class="label" style="margin-bottom:6px">NFT du wallet</div>
-        <div class="grid" id="nfts"></div>
-      </div>
-    </section>
+# ---------------------------
+# Flask app
+# ---------------------------
+app = Flask(__name__)
+app.secret_key = FLASK_SECRET
 
-    <!-- Mines -->
-    <section class="card" id="pane-mines" style="display:none">
-      <div class="grid" id="mines"></div>
-    </section>
+ICON_BYTES = bytes.fromhex(
+    "89504E470D0A1A0A0000000D4948445200000001000000010806000000"
+    "1F15C4890000000A49444154789C6360000002000154A24F6500000000"
+    "49454E44AE426082"
+)
 
-    <!-- Settings -->
-    <section class="card" id="pane-settings" style="display:none">
-      <div class="label">Bracelet</div>
-      <div class="outfits">
-        <button class="btn outfit" data-type="bracelet" data-val="metal">Métal</button>
-        <button class="btn outfit" data-type="bracelet" data-val="leather">Cuir</button>
-      </div>
-      <div style="margin-top:12px">
-        <button class="btn primary" id="saveOutfit">💾 Enregistrer</button>
-      </div>
-    </section>
+@app.route("/static/ton-icon.png")
+def ton_icon():
+    resp = make_response(ICON_BYTES)
+    resp.headers["Content-Type"] = "image/png"
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
 
-    <!-- Danger -->
-    <section class="card" id="pane-danger" style="display:none">
-      <p>Se désinscrire supprimera tes données du jeu (wallet associé, avatar, etc.).</p>
-      <button class="btn" id="btnUnsub">❌ Confirmer la désinscription</button>
-    </section>
-  </main>
-
-  <footer>© Endorisum</footer>
-
-<script>
-(function(){
-  const qs = new URLSearchParams(window.location.search);
-  const uid = qs.get("uid");
-  if(!uid){ document.body.innerHTML = "<p style='padding:16px'>Bad UID</p>"; return; }
-
-  const tgid = document.getElementById('tgid');
-  const wallet = document.getElementById('wallet');
-  const code = document.getElementById('code');
-  const pioches = document.getElementById('pioches');
-  const nftsWrap = document.getElementById('nfts');
-  const minesWrap = document.getElementById('mines');
-
-  const tabs = document.querySelectorAll(".tab");
-  const panes = {
-    profile: document.getElementById('pane-profile'),
-    mines: document.getElementById('pane-mines'),
-    settings: document.getElementById('pane-settings'),
-    danger: document.getElementById('pane-danger'),
-  };
-  tabs.forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      tabs.forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-      for (const k in panes) panes[k].style.display = "none";
-      panes[btn.dataset.pane].style.display = "block";
-      if (btn.dataset.pane === 'mines') loadMines();
-    });
-  });
-
-  let scene, camera, renderer, avatarGroup;
-  function createAvatar(bracelet="metal"){
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0b0e15);
-
-    const w = document.getElementById('avatarWrap').clientWidth;
-    const h = document.getElementById('avatarWrap').clientHeight;
-
-    camera = new THREE.PerspectiveCamera(35, w/h, 0.1, 100);
-    camera.position.set(0, 0, 3);
-
-    renderer = new THREE.WebGLRenderer({ antialias:true });
-    renderer.setSize(w, h);
-    const wrap = document.getElementById('avatarWrap');
-    wrap.innerHTML = "";
-    wrap.appendChild(renderer.domElement);
-
-    const amb = new THREE.AmbientLight(0xffffff, 0.8); scene.add(amb);
-
-    avatarGroup = new THREE.Group(); scene.add(avatarGroup);
-
-    const tex = new THREE.TextureLoader().load('/static/watch.png');
-    const mat = new THREE.MeshStandardMaterial({map:tex});
-    if (bracelet==="leather"){
-      mat.color = new THREE.Color(0x5a3825);
-      mat.metalness = 0.1;
-      mat.roughness = 0.9;
+@app.route("/ton/manifest.json")
+def ton_manifest():
+    manifest = {
+        "url": PUBLIC_BASE_URL,
+        "name": "Endorisum Bot1",
+        "iconUrl": f"{PUBLIC_BASE_URL}/static/ton-icon.png",
+        "termsOfUseUrl": f"{PUBLIC_BASE_URL}/terms",
+        "privacyPolicyUrl": f"{PUBLIC_BASE_URL}/privacy"
     }
-    const watch = new THREE.Mesh(new THREE.CircleGeometry(1.5,64), mat);
-    avatarGroup.add(watch);
+    return jsonify(manifest)
 
-    (function anim(){ requestAnimationFrame(anim); renderer.render(scene,camera); })();
-    document.getElementById('btnLeft').onclick = ()=> avatarGroup.rotation.y -= 0.3;
-    document.getElementById('btnRight').onclick = ()=> avatarGroup.rotation.y += 0.3;
-    document.getElementById('btnCenter').onclick = ()=> avatarGroup.rotation.y = 0;
-  }
+@app.route("/.well-known/tonconnect-manifest.json")
+def ton_manifest_wellknown():
+    return ton_manifest()
 
-  let avatar = { bracelet:'metal' };
+@app.route("/manifest.json")
+def ton_manifest_root_alias():
+    return ton_manifest()
 
-  async function loadMe(){
-    const r = await fetch(`/api/me?uid=${uid}`, {cache:'no-store'});
-    const data = await r.json();
-    if (!data.registered){
-      document.body.innerHTML = "<p style='padding:16px'>Non inscrit.</p>";
-      return;
-    }
-    tgid.textContent = data.telegram_id;
-    wallet.textContent = data.wallet_address || '—';
-    code.textContent = data.personal_code || '—';
-    pioches.textContent = data.pioches_total || 0;
-    avatar = data.avatar || avatar;
+@app.route("/ton/manifest.sjon")
+def ton_manifest_typo_alias():
+    return redirect("/ton/manifest.json")
 
-    nftsWrap.innerHTML = "";
-    (data.nfts||[]).forEach(n=>{
-      const div = document.createElement('div');
-      div.className='nft';
-      div.innerHTML=`<img src="${n.image}"><div>${n.name}</div>`;
-      nftsWrap.appendChild(div);
-    });
+# ---------------------------
+# DB init
+# ---------------------------
+DB_FILE = os.getenv("DB_FILE", "bot.db")
+conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+c = conn.cursor()
+c.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    telegram_id INTEGER PRIMARY KEY,
+    wallet_address TEXT,
+    personal_code TEXT UNIQUE,
+    referral_code_used TEXT,
+    hat TEXT DEFAULT 'none',
+    jacket TEXT DEFAULT 'none',
+    pants TEXT DEFAULT 'none',
+    shoes TEXT DEFAULT 'none',
+    bracelet TEXT DEFAULT 'none'
+)
+""")
+conn.commit()
 
-    createAvatar(avatar.bracelet);
-  }
+# ---------------------------
+# Helpers
+# ---------------------------
+def generate_referral_code(length=6):
+    import random, string
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
-  async function loadMines(){
-    const r = await fetch('/api/mines'); const data = await r.json();
-    minesWrap.innerHTML="";
-    (data.mines||[]).forEach(m=>{
-      const a=document.createElement('a'); a.className='btn'; a.href=m.url; a.textContent=m.title; a.target="_blank";
-      minesWrap.appendChild(a);
-    });
-  }
+def is_user_registered(tg_id: int) -> bool:
+    c.execute("SELECT 1 FROM users WHERE telegram_id=?", (tg_id,))
+    return c.fetchone() is not None
 
-  document.querySelectorAll('.outfit').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const t=btn.dataset.type; const v=btn.dataset.val;
-      avatar[t]=v; createAvatar(avatar.bracelet);
-    });
-  });
+def upsert_user_wallet(tg_id: int, address: str):
+    c.execute("SELECT personal_code FROM users WHERE telegram_id=?", (tg_id,))
+    row = c.fetchone()
+    if row:
+        c.execute("UPDATE users SET wallet_address=? WHERE telegram_id=?", (address, tg_id))
+    else:
+        pc = generate_referral_code()
+        c.execute("INSERT INTO users (telegram_id, wallet_address, personal_code) VALUES (?, ?, ?)", (tg_id, address, pc))
+    conn.commit()
 
-  document.getElementById('saveOutfit').addEventListener('click', async ()=>{
-    await fetch('/api/avatar/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,...avatar})});
-  });
+def get_user_row(tg_id: int):
+    c.execute("SELECT telegram_id, wallet_address, personal_code, referral_code_used, hat, jacket, pants, shoes, bracelet FROM users WHERE telegram_id=?", (tg_id,))
+    r = c.fetchone()
+    return r
 
-  document.getElementById('btnUnsub').addEventListener('click', async ()=>{
-    const ok=confirm("Confirmer la désinscription ?"); if(!ok) return;
-    await fetch('/api/unsubscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})});
-    alert("Compte supprimé."); if (Telegram?.WebApp) Telegram.WebApp.close();
-  });
+def set_referral(tg_id: int, referral_code: str):
+    """Associer un code de parrainage si l’utilisateur n’est pas encore inscrit"""
+    c.execute("SELECT referral_code_used FROM users WHERE telegram_id=?", (tg_id,))
+    row = c.fetchone()
+    if row is None:
+        pc = generate_referral_code()
+        c.execute("INSERT INTO users (telegram_id, personal_code, referral_code_used) VALUES (?, ?, ?)",
+                  (tg_id, pc, referral_code))
+        conn.commit()
+    elif not row[0] and referral_code:
+        c.execute("UPDATE users SET referral_code_used=? WHERE telegram_id=?", (referral_code, tg_id))
+        conn.commit()
 
-  document.getElementById('btnShare').addEventListener('click', ()=>{
-    const link=`https://t.me/${"{{bot_username}}"}?startapp=${code.textContent.trim()}`;
-    if (navigator.share){ navigator.share({title:"Rejoins-moi",text:"Utilise mon code Endorisum",url:link}); }
-    else { prompt("Copie ce lien :", link); }
-  });
+# ---------------------------
+# TonAPI NFTs
+# ---------------------------
+def fetch_nfts_for_wallet(address: str):
+    if not address or not TONAPI_KEY:
+        return []
+    try:
+        url = f"https://tonapi.io/v2/accounts/{address}/nfts"
+        h = {"Authorization": f"Bearer {TONAPI_KEY}"}
+        resp = requests.get(url, headers=h, timeout=8)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        items = data.get("nft_items") or []
+        out = []
+        for it in items:
+            meta = it.get("metadata") or {}
+            image = meta.get("image") or ""
+            name = meta.get("name") or "NFT"
+            out.append({"name": name, "image": image})
+        return out
+    except Exception:
+        return []
 
-  if (Telegram?.WebApp){ Telegram.WebApp.expand(); Telegram.WebApp.ready(); }
-  loadMe();
-})();
-</script>
-</body>
-</html>
+# ---------------------------
+# Telegram helpers
+# ---------------------------
+def send_telegram_message_raw(chat_id: int, text: str, reply_markup: dict = None):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    try:
+        requests.post(url, json=payload, timeout=6)
+    except Exception as e:
+        print("send_telegram_message_raw error:", e)
+
+# ---------------------------
+# Flask API
+# ---------------------------
+@app.route("/api/me")
+def api_me():
+    uid = request.args.get("uid", "").strip()
+    if not uid.isdigit():
+        return jsonify({"registered": False})
+    uid_i = int(uid)
+    row = get_user_row(uid_i)
+    if not row:
+        return jsonify({"registered": False})
+    telegram_id, wallet, personal_code, referral_code_used, hat, jacket, pants, shoes, bracelet = row
+    nfts = fetch_nfts_for_wallet(wallet) if wallet else []
+    pioches_total = 0
+    return jsonify({
+        "registered": True,
+        "telegram_id": telegram_id,
+        "wallet_address": wallet,
+        "personal_code": personal_code,
+        "referral_code_used": referral_code_used,
+        "pioches_total": pioches_total,
+        "avatar": {"hat": hat, "jacket": jacket, "pants": pants, "shoes": shoes, "bracelet": bracelet},
+        "nfts": nfts
+    })
+
+# ---------------------------
+# Telegram bot
+# ---------------------------
+application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    args = context.args
+
+    # Si la commande contient un code de parrainage
+    if args:
+        referral_code = args[0].strip()
+        if referral_code:
+            set_referral(uid, referral_code)
+
+    registered = is_user_registered(uid)
+    nonce = secrets.token_hex(8)
+    if not registered:
+        btn = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔗 Connect TON Wallet", web_app=WebAppInfo(url=f"{PUBLIC_BASE_URL}/ton/connect?uid={uid}&nonce={nonce}"))
+        ]])
+        await update.message.reply_text("Bienvenue — clique pour lier ton wallet TON", reply_markup=btn)
+    else:
+        btn = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔗 Ouvrir la mini-app", web_app=WebAppInfo(url=f"{PUBLIC_BASE_URL}/app.html?uid={uid}"))
+        ]])
+        await update.message.reply_text("Tu es inscrit — ouvre la mini-app :", reply_markup=btn)
+
+application.add_handler(CommandHandler("start", start_cmd))
+
+# ---------------------------
+# Run Flask + Bot
+# ---------------------------
+def run_flask():
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
+
+def run_bot():
+    application.run_polling()
+
+if __name__ == "__main__":
+    Thread(target=run_flask, daemon=True).start()
+    run_bot()
