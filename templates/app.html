@@ -9,28 +9,22 @@
   <script src="https://unpkg.com/three@0.158.0/examples/js/controls/OrbitControls.js"></script>
   <style>
     :root{ --bg:#0f1115; --card:#161a22; --text:#e8eefb; --muted:#9aa7bd; --acc:#5b8cff; }
-    *{ box-sizing:border-box }
     body{ margin:0; background:var(--bg); color:var(--text); font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial }
-    header{ padding:16px; display:flex; align-items:center; gap:12px; border-bottom:1px solid #232835; }
+    header{ padding:16px; border-bottom:1px solid #232835; }
     header h1{ font-size:16px; margin:0; font-weight:600; }
     main{ padding:16px; display:grid; gap:16px; max-width:1024px; margin:0 auto }
     .tabs{ display:flex; gap:8px; flex-wrap:wrap }
     .tab{ background:#1b2130; border:1px solid #2a3244; color:var(--text); padding:10px 14px; border-radius:10px; cursor:pointer }
     .tab.active{ background:var(--acc); border-color:var(--acc); color:#fff }
     .card{ background:var(--card); border:1px solid #2a3244; border-radius:16px; padding:16px }
-    .row{ display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start }
-    .col{ flex:1 1 320px }
     .label{ font-size:12px; color:var(--muted) }
     .val{ font-size:14px; margin:2px 0 10px }
-    .btn{ background:#1e2636; border:1px solid #2a3244; color:var(--text); padding:10px 12px; border-radius:10px; cursor:pointer }
+    .btn{ background:#1e2636; border:1px solid #2a3244; color:var(--text); padding:8px 10px; border-radius:10px; cursor:pointer }
     .btn.primary{ background:var(--acc); border-color:var(--acc); color:#fff }
-    .outfits{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px }
     .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px }
     .nft{ background:#0f131c; border:1px solid #2a3244; border-radius:12px; padding:8px; text-align:center }
-    .nft img{ width:100%; height:120px; object-fit:cover; border-radius:8px; background:#090c12 }
-    #avatarWrap{ height:340px; background:#0b0e15; border:1px solid #2a3244; border-radius:12px; overflow:hidden }
-    footer{ padding:16px; text-align:center; color:var(--muted); font-size:12px }
-    a{ color:#aecdff; text-decoration:none }
+    .nft img{ width:100%; height:120px; object-fit:cover; border-radius:8px }
+    #avatarWrap{ height:280px; background:#0b0e15; border:1px solid #2a3244; border-radius:12px; overflow:hidden }
   </style>
 </head>
 <body>
@@ -48,29 +42,21 @@
 
     <!-- Profil -->
     <section class="card" id="pane-profile">
-      <div class="row">
-        <div class="col">
-          <div class="label">Telegram ID</div>
-          <div class="val" id="tgid">—</div>
-          <div class="label">Wallet TON</div>
-          <div class="val" id="wallet">—</div>
-          <div class="label">Code de parrainage</div>
-          <div class="val"><span id="code">—</span> <button class="btn" id="btnShare">Partager</button></div>
-          <div class="label">Total pioches</div>
-          <div class="val" id="pioches">0</div>
-        </div>
-        <div class="col">
-          <div id="avatarWrap"></div>
-          <div style="margin-top:10px; display:flex; gap:8px;">
-            <button class="btn" id="btnLeft">↺ Tourner</button>
-            <button class="btn" id="btnRight">↻ Tourner</button>
-            <button class="btn primary" id="btnCenter">Centrer</button>
-          </div>
-        </div>
-      </div>
+      <div class="label">Telegram ID</div>
+      <div class="val" id="tgid">—</div>
+      <div class="label">Wallet TON</div>
+      <div class="val" id="wallet">—</div>
+      <div class="label">Code de parrainage</div>
+      <div class="val"><span id="code">—</span> <button class="btn" id="btnShare">Partager</button></div>
+      <div class="label">Parrain</div>
+      <div class="val" id="referrer">—</div>
+      <div class="label">Total pioches</div>
+      <div class="val" id="pioches">0</div>
+
+      <div id="avatarWrap" style="margin-top:12px"></div>
 
       <div style="margin-top:12px">
-        <div class="label" style="margin-bottom:6px">NFT du wallet</div>
+        <div class="label">NFT du wallet</div>
         <div class="grid" id="nfts"></div>
       </div>
     </section>
@@ -83,150 +69,113 @@
     <!-- Settings -->
     <section class="card" id="pane-settings" style="display:none">
       <div class="label">Bracelet</div>
-      <div class="outfits">
-        <button class="btn outfit" data-type="bracelet" data-val="metal">Métal</button>
-        <button class="btn outfit" data-type="bracelet" data-val="leather">Cuir</button>
-      </div>
-      <div style="margin-top:12px">
-        <button class="btn primary" id="saveOutfit">💾 Enregistrer</button>
-      </div>
+      <button class="btn outfit" data-type="bracelet" data-val="metal">Métal</button>
+      <button class="btn outfit" data-type="bracelet" data-val="leather">Cuir</button>
+      <div style="margin-top:12px"><button class="btn primary" id="saveOutfit">💾 Enregistrer</button></div>
     </section>
 
     <!-- Danger -->
     <section class="card" id="pane-danger" style="display:none">
-      <p>Se désinscrire supprimera tes données du jeu (wallet associé, avatar, etc.).</p>
+      <p>Se désinscrire supprimera tes données (wallet, avatar, etc.).</p>
       <button class="btn" id="btnUnsub">❌ Confirmer la désinscription</button>
     </section>
   </main>
-
-  <footer>© Endorisum</footer>
 
 <script>
 (function(){
   const qs = new URLSearchParams(window.location.search);
   const uid = qs.get("uid");
-  if(!uid){ document.body.innerHTML = "<p style='padding:16px'>Bad UID</p>"; return; }
+  if(!uid){ document.body.innerHTML = "<p>Bad UID</p>"; return; }
 
-  const tgid = document.getElementById('tgid');
-  const wallet = document.getElementById('wallet');
-  const code = document.getElementById('code');
-  const pioches = document.getElementById('pioches');
-  const nftsWrap = document.getElementById('nfts');
-  const minesWrap = document.getElementById('mines');
+  const botUsername = "Labail_bot"; // adapte si ton bot change
 
-  const tabs = document.querySelectorAll(".tab");
-  const panes = {
-    profile: document.getElementById('pane-profile'),
-    mines: document.getElementById('pane-mines'),
-    settings: document.getElementById('pane-settings'),
-    danger: document.getElementById('pane-danger'),
+  const tgid=document.getElementById('tgid');
+  const wallet=document.getElementById('wallet');
+  const code=document.getElementById('code');
+  const pioches=document.getElementById('pioches');
+  const referrer=document.getElementById('referrer');
+  const nftsWrap=document.getElementById('nfts');
+
+  const panes={
+    profile:document.getElementById('pane-profile'),
+    mines:document.getElementById('pane-mines'),
+    settings:document.getElementById('pane-settings'),
+    danger:document.getElementById('pane-danger')
   };
-  tabs.forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      tabs.forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll(".tab").forEach(btn=>{
+    btn.onclick=()=>{
+      document.querySelectorAll(".tab").forEach(b=>b.classList.remove('active'));
       btn.classList.add('active');
-      for (const k in panes) panes[k].style.display = "none";
-      panes[btn.dataset.pane].style.display = "block";
-      if (btn.dataset.pane === 'mines') loadMines();
-    });
+      for(const k in panes) panes[k].style.display="none";
+      panes[btn.dataset.pane].style.display="block";
+      if(btn.dataset.pane==='mines') loadMines();
+    }
   });
 
-  let scene, camera, renderer, avatarGroup;
   function createAvatar(bracelet="metal"){
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0b0e15);
-
-    const w = document.getElementById('avatarWrap').clientWidth;
-    const h = document.getElementById('avatarWrap').clientHeight;
-
-    camera = new THREE.PerspectiveCamera(35, w/h, 0.1, 100);
-    camera.position.set(0, 0, 3);
-
-    renderer = new THREE.WebGLRenderer({ antialias:true });
-    renderer.setSize(w, h);
-    const wrap = document.getElementById('avatarWrap');
-    wrap.innerHTML = "";
-    wrap.appendChild(renderer.domElement);
-
-    const amb = new THREE.AmbientLight(0xffffff, 0.8); scene.add(amb);
-
-    avatarGroup = new THREE.Group(); scene.add(avatarGroup);
-
-    const tex = new THREE.TextureLoader().load('/static/watch.png');
-    const mat = new THREE.MeshStandardMaterial({map:tex});
-    if (bracelet==="leather"){
-      mat.color = new THREE.Color(0x5a3825);
-      mat.metalness = 0.1;
-      mat.roughness = 0.9;
-    }
-    const watch = new THREE.Mesh(new THREE.CircleGeometry(1.5,64), mat);
-    avatarGroup.add(watch);
-
+    const wrap=document.getElementById('avatarWrap');
+    wrap.innerHTML="";
+    const w=wrap.clientWidth, h=wrap.clientHeight;
+    const scene=new THREE.Scene(); scene.background=new THREE.Color(0x0b0e15);
+    const camera=new THREE.PerspectiveCamera(35,w/h,0.1,100); camera.position.set(0,0,3);
+    const renderer=new THREE.WebGLRenderer({antialias:true}); renderer.setSize(w,h); wrap.appendChild(renderer.domElement);
+    const amb=new THREE.AmbientLight(0xffffff,0.8); scene.add(amb);
+    const tex=new THREE.TextureLoader().load('/static/watch.png');
+    const mat=new THREE.MeshStandardMaterial({map:tex});
+    if(bracelet==="leather"){ mat.color=new THREE.Color(0x5a3825); mat.metalness=0.1; mat.roughness=0.9; }
+    const mesh=new THREE.Mesh(new THREE.CircleGeometry(1.5,64),mat);
+    scene.add(mesh);
     (function anim(){ requestAnimationFrame(anim); renderer.render(scene,camera); })();
-    document.getElementById('btnLeft').onclick = ()=> avatarGroup.rotation.y -= 0.3;
-    document.getElementById('btnRight').onclick = ()=> avatarGroup.rotation.y += 0.3;
-    document.getElementById('btnCenter').onclick = ()=> avatarGroup.rotation.y = 0;
   }
 
-  let avatar = { bracelet:'metal' };
+  let avatar={bracelet:'metal'};
 
   async function loadMe(){
-    const r = await fetch(`/api/me?uid=${uid}`, {cache:'no-store'});
-    const data = await r.json();
-    if (!data.registered){
-      document.body.innerHTML = "<p style='padding:16px'>Non inscrit.</p>";
-      return;
-    }
-    tgid.textContent = data.telegram_id;
-    wallet.textContent = data.wallet_address || '—';
-    code.textContent = data.personal_code || '—';
-    pioches.textContent = data.pioches_total || 0;
-    avatar = data.avatar || avatar;
-
-    nftsWrap.innerHTML = "";
-    (data.nfts||[]).forEach(n=>{
-      const div = document.createElement('div');
-      div.className='nft';
+    const r=await fetch(`/api/me?uid=${uid}`);
+    const d=await r.json();
+    if(!d.registered){ document.body.innerHTML="<p>Non inscrit.</p>"; return; }
+    tgid.textContent=d.telegram_id;
+    wallet.textContent=d.wallet_address||'—';
+    code.textContent=d.personal_code||'—';
+    referrer.textContent=d.referral_code_used||'—';
+    pioches.textContent=d.pioches_total||0;
+    avatar=d.avatar||avatar;
+    nftsWrap.innerHTML="";
+    (d.nfts||[]).forEach(n=>{
+      const div=document.createElement('div'); div.className='nft';
       div.innerHTML=`<img src="${n.image}"><div>${n.name}</div>`;
       nftsWrap.appendChild(div);
     });
-
     createAvatar(avatar.bracelet);
   }
 
   async function loadMines(){
-    const r = await fetch('/api/mines'); const data = await r.json();
-    minesWrap.innerHTML="";
-    (data.mines||[]).forEach(m=>{
-      const a=document.createElement('a'); a.className='btn'; a.href=m.url; a.textContent=m.title; a.target="_blank";
-      minesWrap.appendChild(a);
+    const r=await fetch('/api/mines'); const d=await r.json();
+    mines.innerHTML=""; (d.mines||[]).forEach(m=>{
+      const a=document.createElement('a'); a.className='btn'; a.href=m.url; a.textContent=m.title; a.target="_blank"; mines.appendChild(a);
     });
   }
 
   document.querySelectorAll('.outfit').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const t=btn.dataset.type; const v=btn.dataset.val;
-      avatar[t]=v; createAvatar(avatar.bracelet);
-    });
+    btn.onclick=()=>{ avatar[btn.dataset.type]=btn.dataset.val; createAvatar(avatar.bracelet); };
   });
+  document.getElementById('saveOutfit').onclick=()=>{
+    fetch('/api/avatar/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,...avatar})});
+  };
 
-  document.getElementById('saveOutfit').addEventListener('click', async ()=>{
-    await fetch('/api/avatar/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,...avatar})});
-  });
-
-  document.getElementById('btnUnsub').addEventListener('click', async ()=>{
-    const ok=confirm("Confirmer la désinscription ?"); if(!ok) return;
+  document.getElementById('btnUnsub').onclick=async()=>{
+    if(!confirm("Confirmer ?"))return;
     await fetch('/api/unsubscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})});
-    alert("Compte supprimé."); if (Telegram?.WebApp) Telegram.WebApp.close();
-  });
+    alert("Compte supprimé"); if(Telegram?.WebApp) Telegram.WebApp.close();
+  };
 
-  document.getElementById('btnShare').addEventListener('click', ()=>{
-    const link=`https://t.me/${"{{bot_username}}"}?startapp=${code.textContent.trim()}`;
-    if (navigator.share){ navigator.share({title:"Rejoins-moi",text:"Utilise mon code Endorisum",url:link}); }
-    else { prompt("Copie ce lien :", link); }
-  });
+  document.getElementById('btnShare').onclick=()=>{
+    const link=`https://t.me/${botUsername}?start=${code.textContent.trim()}`;
+    if(navigator.share){ navigator.share({title:"Rejoins-moi",text:"Voici mon code Endorisum",url:link}); }
+    else{ prompt("Copie ce lien :", link); }
+  };
 
-  if (Telegram?.WebApp){ Telegram.WebApp.expand(); Telegram.WebApp.ready(); }
+  if(Telegram?.WebApp){ Telegram.WebApp.expand(); Telegram.WebApp.ready(); }
   loadMe();
 })();
 </script>
