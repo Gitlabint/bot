@@ -31,9 +31,6 @@
     #avatarWrap{ height:340px; background:#0b0e15; border:1px solid #2a3244; border-radius:12px; overflow:hidden }
     footer{ padding:16px; text-align:center; color:var(--muted); font-size:12px }
     a{ color:#aecdff; text-decoration:none }
-    .pfp{ width:64px; height:64px; border-radius:50%; object-fit:cover; border:1px solid #2a3244 }
-    .inline{ display:flex; align-items:center; gap:10px }
-    .input{ background:#0f131c; border:1px solid #2a3244; color:#e8eefb; border-radius:10px; padding:8px 10px; width:100% }
   </style>
 </head>
 <body>
@@ -53,30 +50,20 @@
     <section class="card" id="pane-profile">
       <div class="row">
         <div class="col">
-          <div class="inline" style="margin-bottom:10px">
-            <img id="pfp" class="pfp" src="" alt="" onerror="this.style.display='none'">
-            <div>
-              <div class="label">Handle</div>
-              <div class="val" id="handle">—</div>
-            </div>
-          </div>
-
           <div class="label">Telegram ID</div>
           <div class="val" id="tgid">—</div>
-
           <div class="label">Wallet TON</div>
           <div class="val" id="wallet">—</div>
-
           <div class="label">Code de parrainage</div>
-          <div class="val"><span id="code">—</span> <button class="btn" id="btnShare">Partager</button></div>
-
+          <div class="val">
+            <span id="code">—</span> 
+            <button class="btn" id="btnShare">Partager</button>
+          </div>
           <div class="label">Parrain</div>
-          <div class="val" id="sponsor">—</div>
-
-          <div class="label">Total pioches</div>
+          <div class="val" id="referrer">—</div>
+          <div class="label">Total trophées</div>
           <div class="val" id="pioches">0</div>
         </div>
-
         <div class="col">
           <div id="avatarWrap"></div>
           <div style="margin-top:10px; display:flex; gap:8px;">
@@ -89,10 +76,6 @@
 
       <div style="margin-top:12px">
         <div class="label" style="margin-bottom:6px">NFT du wallet</div>
-        <div class="inline" style="margin-bottom:8px">
-          <input id="nftFilter" class="input" placeholder="Filtrer par nom de collection…">
-          <button class="btn" id="btnClearFilter">Effacer</button>
-        </div>
         <div class="grid" id="nfts"></div>
       </div>
     </section>
@@ -129,16 +112,17 @@
   const uid = qs.get("uid");
   if(!uid){ document.body.innerHTML = "<p style='padding:16px'>Bad UID</p>"; return; }
 
-  const pfp     = document.getElementById('pfp');
-  const handle  = document.getElementById('handle');
-  const tgid    = document.getElementById('tgid');
-  const wallet  = document.getElementById('wallet');
-  const code    = document.getElementById('code');
-  const sponsor = document.getElementById('sponsor');
+  let BOT_USERNAME = "";
+
+  const tgid = document.getElementById('tgid');
+  const wallet = document.getElementById('wallet');
+  const code = document.getElementById('code');
+  const referrer = document.getElementById('referrer');
   const pioches = document.getElementById('pioches');
-  const nftsWrap= document.getElementById('nfts');
+  const nftsWrap = document.getElementById('nfts');
   const minesWrap = document.getElementById('mines');
 
+  // Tabs
   const tabs = document.querySelectorAll(".tab");
   const panes = {
     profile: document.getElementById('pane-profile'),
@@ -156,7 +140,7 @@
     });
   });
 
-  // -------- Avatar (montre simple) --------
+  // Avatar
   let scene, camera, renderer, avatarGroup;
   function createAvatar(bracelet="metal"){
     scene = new THREE.Scene();
@@ -174,11 +158,11 @@
     wrap.innerHTML = "";
     wrap.appendChild(renderer.domElement);
 
-    const amb = new THREE.AmbientLight(0xffffff, 0.9); scene.add(amb);
+    const amb = new THREE.AmbientLight(0xffffff, 0.8); scene.add(amb);
 
     avatarGroup = new THREE.Group(); scene.add(avatarGroup);
 
-    const tex = new THREE.TextureLoader().load('/static/watch.png'); // place static/watch.png dans /static
+    const tex = new THREE.TextureLoader().load('/static/watch.png');
     const mat = new THREE.MeshStandardMaterial({map:tex});
     if (bracelet==="leather"){
       mat.color = new THREE.Color(0x5a3825);
@@ -189,51 +173,37 @@
     avatarGroup.add(watch);
 
     (function anim(){ requestAnimationFrame(anim); renderer.render(scene,camera); })();
-    document.getElementById('btnLeft').onclick  = ()=> avatarGroup.rotation.y -= 0.3;
+    document.getElementById('btnLeft').onclick = ()=> avatarGroup.rotation.y -= 0.3;
     document.getElementById('btnRight').onclick = ()=> avatarGroup.rotation.y += 0.3;
-    document.getElementById('btnCenter').onclick= ()=> avatarGroup.rotation.y = 0;
+    document.getElementById('btnCenter').onclick = ()=> avatarGroup.rotation.y = 0;
   }
-  let avatar = { bracelet:'metal' };
 
-  // -------- Data load --------
-  let BOT_USERNAME = "";
-  let ALL_NFTS = [];
+  let avatar = { bracelet:'metal' };
 
   async function loadMe(){
     const r = await fetch(`/api/me?uid=${uid}`, {cache:'no-store'});
     const data = await r.json();
     if (!data.registered){
-      document.body.innerHTML = "<p style='padding:16px'>Non inscrit. Lance /start dans le bot.</p>";
+      document.body.innerHTML = "<p style='padding:16px'>Non inscrit.</p>";
       return;
     }
     BOT_USERNAME = data.bot_username || "";
-    if (data.profile_photo_url) { pfp.src = data.profile_photo_url; pfp.style.display = 'block'; }
-    handle.textContent = data.username ? '@'+data.username : '—';
-    tgid.textContent   = data.telegram_id;
+    tgid.textContent = data.telegram_id;
     wallet.textContent = data.wallet_address || '—';
-    code.textContent   = data.personal_code || '—';
-    pioches.textContent= data.pioches_total || 0;
-    sponsor.textContent= data.invited_by_username ? '@'+data.invited_by_username : '—';
-
+    code.textContent = data.personal_code || '—';
+    referrer.textContent = data.referrer || '—';
+    pioches.textContent = data.pioches_total || 0;
     avatar = data.avatar || avatar;
-    createAvatar(avatar.bracelet);
 
-    ALL_NFTS = data.nfts || [];
-    drawNFTs();
-  }
-
-  function drawNFTs(filterText=""){
     nftsWrap.innerHTML = "";
-    const norm = (s)=> (s||"").toLowerCase();
-    const f = norm(filterText);
-    (ALL_NFTS||[]).forEach(n=>{
-      const name = n.name || '';
-      if (f && !norm(name).includes(f)) return;
+    (data.nfts||[]).forEach(n=>{
       const div = document.createElement('div');
-      div.className = 'nft';
-      div.innerHTML = `<img src="${n.image||''}" alt=""><div style="margin-top:6px; font-size:12px">${name||'NFT'}</div>`;
+      div.className='nft';
+      div.innerHTML=`<img src="${n.image}"><div>${n.name}</div>`;
       nftsWrap.appendChild(div);
     });
+
+    createAvatar(avatar.bracelet);
   }
 
   async function loadMines(){
@@ -245,51 +215,40 @@
     });
   }
 
-  document.getElementById('nftFilter').addEventListener('input', (e)=> drawNFTs(e.target.value));
-  document.getElementById('btnClearFilter').addEventListener('click', ()=> { document.getElementById('nftFilter').value=''; drawNFTs(''); });
-
-  // Outfits
   document.querySelectorAll('.outfit').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      avatar[btn.dataset.type] = btn.dataset.val;
-      createAvatar(avatar.bracelet);
+      const t=btn.dataset.type; const v=btn.dataset.val;
+      avatar[t]=v; createAvatar(avatar.bracelet);
     });
   });
 
   document.getElementById('saveOutfit').addEventListener('click', async ()=>{
-    await fetch('/api/avatar/update',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ uid, ...avatar })
-    });
-    Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success');
+    await fetch('/api/avatar/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,...avatar})});
   });
 
-  // Désinscription
   document.getElementById('btnUnsub').addEventListener('click', async ()=>{
-    const ok = confirm("Confirmer la désinscription ?");
-    if(!ok) return;
-    await fetch('/api/unsubscribe',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ uid })
-    });
-    alert("Compte supprimé. Relance /start pour te réinscrire.");
-    Telegram?.WebApp?.close?.();
+    const ok=confirm("Confirmer la désinscription ?"); if(!ok) return;
+    await fetch('/api/unsubscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})});
+    alert("Compte supprimé."); if (Telegram?.WebApp) Telegram.WebApp.close();
   });
 
-  // Partage du code (ouvre Telegram si possible)
   document.getElementById('btnShare').addEventListener('click', ()=>{
-    const link = `https://t.me/${BOT_USERNAME}?start=${code.textContent.trim()}`;
-    const text = `Rejoins-moi sur Endorisum ! Clique ici : ${link}`;
-    // Si l’app Telegram WebApp expose un moyen d’ouvrir un lien interne :
-    if (window.Telegram && Telegram.WebApp) {
-      Telegram.WebApp.openTelegramLink(link);
+    const codeVal = code.textContent.trim();
+    if (!BOT_USERNAME || !codeVal || codeVal==="—") {
+      alert("Code de parrainage indisponible.");
       return;
     }
-    // Sinon Web Share / fallback
-    if (navigator.share){
-      navigator.share({ title:"Rejoins-moi sur Endorisum", text, url: link }).catch(()=>{});
+    const link = `https://t.me/${BOT_USERNAME}?start=${codeVal}`;
+    const text = `Rejoins-moi sur Endorisum ! Clique ici : ${link}`;
+
+    if (navigator.share) {
+      navigator.share({
+        title: "Rejoins-moi sur Endorisum",
+        text: text,
+        url: link
+      }).catch(()=>{});
     } else {
-      prompt("Copie ce lien :", link);
+      prompt("Copie ce lien pour le partager :", link);
     }
   });
 
